@@ -263,6 +263,30 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     } else {
       ok('console does not depend on the DSH host plugin')
     }
+    /**
+     * ...and it must SAY so at boot.
+     *
+     * Being served by the service is not enough. Without this flag the shared shell
+     * still probed `/dsh-market/config` — a route of the LOCAL plugin, absent on the
+     * service origin — got a 404, and concluded "not configured". The console then
+     * showed 「服务端未就绪」 on a perfectly healthy service. Merely asserting the
+     * ABSENCE of that string was not sufficient, so the presence of the flag is
+     * asserted too.
+     */
+    if (/serveSelf:\s*true/.test(consolePage)) {
+      ok('console declares serveSelf — it uses its own origin as the service URL')
+    } else {
+      fail('console does not declare serveSelf: true — it would probe the DSH host plugin and report itself as not ready')
+    }
+  }
+
+  if (fs.existsSync(marketPath)) {
+    const marketPage = fs.readFileSync(marketPath, 'utf8')
+    if (/serveSelf:\s*true/.test(marketPage)) {
+      fail('the DSH install page declares serveSelf — it IS served by the host plugin and must ask it for the service URL')
+    } else {
+      ok('DSH install page asks the host plugin for the service URL (no serveSelf)')
+    }
   }
 
   // Both surfaces share one copy of the plumbing and one stylesheet.

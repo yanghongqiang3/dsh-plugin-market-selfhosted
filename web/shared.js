@@ -263,10 +263,19 @@
   }
 
   /**
-   * Fetch the local host plugin's config, then decide what the user sees.
+   * Decide where the service is, then show the right view.
    *
-   * The local half knows the service URL and the profile directory; the service is
-   * authoritative for identity. Both are needed before any view is meaningful.
+   * There are two ways this page can be served, and they need opposite treatment:
+   *
+   *  - **By the service itself** (the console at `/console`). The service URL is
+   *    simply this origin — there is no DSH host plugin to ask, and asking it is
+   *    wrong: `/dsh-market/config` is a route of the LOCAL plugin, so on the service
+   *    origin it 404s and this page would conclude "not configured" and refuse to
+   *    start. That is exactly what happened.
+   *  - **By the DSH host plugin** (the install page at `/market`). Only this machine
+   *    knows the bound service URL, so the config probe is required.
+   *
+   * `serveSelf` is declared by the page that the service serves.
    */
   async function boot(options = {}) {
     const views = options.views ?? []
@@ -281,15 +290,30 @@
       }
     }
 
-    let localConfig = null
-    try {
-      const result = await local('/dsh-market/config')
-      localConfig = result.body
-    } catch { /* the local half may not be reachable; reported below */ }
+    if (options.serveSelf === true) {
+      state.serviceUrl = global.location.origin
+      state.serviceConfigured = true
+      state.profileDir = null
+    } else {
+      let localConfig = null
+      try {
+        const result = await local('/dsh-market/config')
+        localConfig = result.body
+      } catch { /* the local half may not be reachable; reported below */ }
 
-    state.serviceUrl = localConfig?.serviceUrl ?? null
-    state.serviceConfigured = Boolean(localConfig?.configured)
-    state.profileDir = localConfig?.profileDir ?? null
+      state.serviceUrl = localConfig?.serviceUrl ?? null
+      state.serviceConfigured = Boolean(localConfig?.configured)
+      state.profileDir = localConfig?.profileDir ?? null
+    }
+
+    // A token issued by a different service is meaningless here: drop it rather
+    // than showing a confusing 401.
+    if (token.get() && global.localStorage.getItem(SERVICE_KEY) !== state.serviceUrl) token.clear()
+
+    // Say which service the login is for. Rendered here rather than after a
+    // successful sign-in, so it is visible on the very screen that needs it.
+    const hint = $('login-service')
+    if (hint) hint.textContent = state.serviceUrl ? `服务端：${state.serviceUrl}` : ''
 
     if (!state.serviceConfigured) {
       show('noService')

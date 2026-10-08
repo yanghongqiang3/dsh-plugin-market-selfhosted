@@ -525,7 +525,7 @@ function renderArtifacts() {
 
 S.onAuthenticated(async () => {
   setWho(state.me?.displayName ?? state.me?.username ?? '')
-  $('login-service').textContent = state.serviceUrl ?? location.origin
+  $('login-service').textContent = `服务端：${state.serviceUrl}`
   if (!state.isAdmin) {
     $('denied-who').textContent = `当前账号：${state.me?.username ?? '(未知)'}（非管理员）`
     show('denied')
@@ -615,6 +615,10 @@ $('gr-submit').addEventListener('click', async () => {
 })
 
 S.init({
+  // This page is served BY the market service, so the service is simply wherever the
+  // page came from. Asking the DSH host plugin instead 404s and made the console
+  // report itself as 「服务端未就绪」.
+  serveSelf: true,
   views: ['noService', 'login', 'password', 'denied', 'console'],
   onView: (view) => {
     const signedIn = view === 'console' || view === 'denied'
