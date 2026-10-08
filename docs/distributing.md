@@ -8,27 +8,41 @@
 
 ## 0. 快速版
 
+首次安装和日常升级是**两条不同的路**，别混。
+
+### 首次安装（每台新机器一次）
+
 ```powershell
-# ① 在开发机打一个分发包（只做一次）
-cd E:\workspace\dsh
-node tools\pack-dist.mjs
-#   -> dist\dsh-plugin-marketplace-0.1.0.tgz
+# 机器上先有 Node >= 22.5，并把分发包放在一个本地路径
+$tgz = "$env:USERPROFILE\Downloads\dsh-plugin-marketplace-0.1.0.tgz"
 
-# ② 把 tgz 分发出去（共享盘 / 内部文件服务器），在每台客户端上安装
-dsh plugin --profile <profile> add ".\dsh-plugin-marketplace-0.1.0.tgz"
+# ① 装进 profile（dsh 会自己把它登记进 dsh.profile.bundles）
+dsh plugin --profile <profile> add $tgz
 
-# ③ 每台客户端把环境变量指向服务端，然后重启 DSH
+# ② 指向服务端（用户级变量，然后重启 DSH）
 [Environment]::SetEnvironmentVariable('MARKET_SERVICE_URL', 'http://<服务器>:8787', 'User')
 ```
 
-**① 只做一次；② 和 ③ 每台客户端都要做。**
+装完**重启 DSH**，左侧栏底部出现「内部插件市场」。此后**升级不用再管**（见 §8）。
 
-前提是**服务端已经部署在一台大家都访问得到的服务器上**——那是服务端部署的事，
-不是客户端分发的事。
+全程实测过（`tools/probe-self-update.mjs` 与手工验证）：
 
-> `dsh plugin add` 会一次做完三件事：写进 profile 的 `dependencies`、
-> **加进 `dsh.profile.bundles`**、用 pnpm 装进 profile 的 `node_modules`。
-> 第三件是关键（见 §2）。
+| 检查 | 结果 |
+|---|---|
+| 在一个**全新** profile（只有 base + web-app）上跑 `add` | ✅ 成功 |
+| `dsh.profile.bundles` 是否自动登记 | ✅ 自动加上 `dsh-plugin-marketplace` |
+| 装出来是真目录还是链接 | ✅ **真目录**（`isSymbolicLink = false`），所以自动更新对它有效 |
+| 重启后入口是否出现 | ✅ |
+
+> **`<profile>` 填哪个？** 填你实际启动 DSH 时用的那个。桌面版默认是 `desktop`；
+> `dsh web --profile X` 就用 `X`。用错了不会报错，只是入口出现在另一个 profile 里。
+
+> **路径必须是本地盘。** 已实测 **UNC 路径（`\\server\share\...`）pnpm 不接受**，
+> 映射网络驱动器（`Z:\...`）**未验证**。拿不准就先拷到本地再装。
+>
+> `add` 会把**你给的那个路径**写进 profile 的 `package.json`（`file:C:/...`）。
+> 实测：**之后删掉那个 tgz 不影响 DSH 启动**，只在手工重装时才需要它。
+> 想干净的话，装完可以把它删掉，或者留在共享盘上作为下次重装的来源。
 
 ---
 
