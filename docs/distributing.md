@@ -241,6 +241,17 @@ sha256、下载接口、客户端解包，全都只看一种格式。
 | 包了一层（`package/` 或任意同名目录） | 剥掉前缀 + 转成扁平 tar.gz |
 | 截断 / CRC 不符 / zip64 / 加密的 zip | 拒绝，并说明是哪一种 |
 
+### 技能可以没有 package.json
+
+只有 `SKILL.md` 的技能包也能发布：服务端按 frontmatter 补出 manifest。`kind` 强制为 skill，
+名字取 `name`，摘要取 `description`，版本默认 `0.1.0`。
+
+发布表单的「包名」「版本」两个可选输入只在这种情况下生效，用于覆盖后两项——
+**作用域决定权限规则能否匹配**（`@dsh-internal/*` 匹配不到裸的 `my-skill`），
+**版本决定客户端能否看出更新**。预检会把补出的内容显示出来。
+
+补出的 manifest 会**注入归档**，所以入库形状不变（扁平 tar.gz + 根部的 package.json）。
+
 > 顺带修掉一个既有 bug：`inspectArchive` 一直**接受** npm 布局，而客户端只在归档**根**上找
 > `package.json`。于是市场能发布、能上架、能下载，**客户端却在最后一步报 `E_NOT_PACKAGE`**，
 > 而前面的每一步都没有任何异常迹象。布局规则现在抽成 `server/lib/layout.js`，服务端与客户端共用，

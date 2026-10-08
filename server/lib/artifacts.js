@@ -19,9 +19,17 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { rowToArtifact } from './db.js'
-import { ArchiveError, collectFiles, inspectArchive, packTarGz, sha256 } from './pack.js'
+import { PACKAGE_NAME_RE } from './layout.js'
+import { ArchiveError, collectFiles, inspectArchive, packTarGzEntries, sha256, synthesiseSkillManifest } from './pack.js'
 
-const NAME_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/
+/**
+ * The package-name rule, from the shared module rather than declared a second time.
+ *
+ * The synthesis path (giving a skill bundle the manifest it lacks) and this check must accept
+ * exactly the same set of names, or the service would create an artifact it then refuses to
+ * record.
+ */
+const NAME_RE = PACKAGE_NAME_RE
 export const ARTIFACT_STATES = ['draft', 'review', 'published', 'revoked']
 
 /**
@@ -60,17 +68,33 @@ export class Artifacts {
   // ------------------------------------------------------------------ publish
 
   /** Pack a package directory that lives on this machine, then record it. */
-  publishFromDirectory(packageDir, { publishedBy = 'system', state = null, channel = null } = {}) {
+  publishFromDirectory(packageDir, { publishedBy = 'system', state = null, channel = null, name = null, version = null } = {}) {
     const dir = resolve(packageDir)
-    const pkgPath = join(dir, 'package.json')
-    if (!existsSync(pkgPath)) throw new Error(`no package.json in ${dir}`)
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-    const marketPath = join(dir, 'market.json')
-    const meta = existsSync(marketPath) ? JSON.parse(readFileSync(marketPath, 'utf8')) : {}
-
     const files = collectFiles(dir)
     if (files.length === 0) throw new Error(`nothing to publish in ${dir}`)
-    const archive = packTarGz(dir, files)
+
+    /**
+     * A directory holding only a SKILL.md is a valid skill bundle.
+     *
+     * The service synthesises the manifest for an upload; the CLI has to do the same for a
+     * directory, or `publish --dir <技能目录>` would fail where the console succeeds — the
+     * two entry points disagreeing about what a publishable thing is.
+     */
+    let entries = new Map(files.map((relative) => [relative, readFileSync(join(dir, relative))]))
+    if (!entries.has('package.json')) {
+      const made = synthesiseSkillManifest(entries, { name, version })
+      if (made !== null) {
+        if (made.ok === false) {
+          const error = new Error(made.detail)
+          error.code = made.code
+          throw error
+        }
+        entries = made.entries
+      } else {
+        throw new Error(`no package.json in ${dir}`)
+      }
+    }
+    const archive = packTarGzEntries(entries)
 
     /**
      * Inspect the packed archive rather than trusting the directory.
@@ -88,8 +112,10 @@ export class Artifacts {
     }
 
     return this.record(archive, {
-      pkg,
-      meta,
+      // From the INSPECTION, not a second read of the directory: after synthesis the archive
+      // is the authority on its own manifest.
+      pkg: inspection.pkg,
+      meta: inspection.meta,
       kind: inspection.kind,
       publishedBy,
       state,

@@ -19,6 +19,18 @@ export function normaliseArchiveName(name) {
 }
 
 /**
+ * The market's package-name rule.
+ *
+ * Lives here, in the shared module, because three places need to agree on it: the service
+ * when it records an artifact, the service when it SYNTHESISES a manifest for a skill bundle
+ * that has none, and the client when it validates what it installed.
+ *
+ * Scoped and unscoped are both allowed. A scope is not decoration: permission rules match on
+ * the package name, so a grant written `@dsh-internal/*` never matches a bare `my-skill`.
+ */
+export const PACKAGE_NAME_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/
+
+/**
  * Work out the prefix that must be stripped to reach a package root.
  *
  * @param {Iterable<string>} names archive entry names
@@ -67,7 +79,10 @@ function noPackage() {
   return {
     ok: false,
     code: 'E_NOT_PACKAGE',
-    detail: '归档内没有 package.json（如果压缩时多包了一层目录，也已经尝试过剥掉，仍没找到）',
+    detail: '归档内既没有 package.json，也没有可用的 SKILL.md。'
+      + '发插件需要 package.json（含 name 与 version）；'
+      + '发技能只需要一个 SKILL.md，其 frontmatter 里要有 name 与 description。'
+      + '如果压缩时多包了一层目录，也已经尝试过剥掉。',
   }
 }
 

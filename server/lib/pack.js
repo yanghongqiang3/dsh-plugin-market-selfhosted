@@ -11,7 +11,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, normalize, resolve, sep } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
-import { detectPackagePrefix, stripPrefixFromEntries } from './layout.js'
+import { PACKAGE_NAME_RE, detectPackagePrefix, normaliseArchiveName, stripPrefixFromEntries } from './layout.js'
+import { parseVersion } from './version.js'
 import { looksLikeZip, readZip } from './zip.js'
 
 const BLOCK = 512
@@ -295,7 +296,97 @@ export function parseSkillFrontmatter(text) {
   if (typeof fields.description !== 'string' || fields.description === '') {
     return { ok: false, code: 'E_SKILL_BAD_FRONTMATTER', detail: 'SKILL.md 的 frontmatter 缺少 description' }
   }
-  return { ok: true, name: fields.name, description: fields.description, whenToUse: fields.whenToUse ?? null }
+  return {
+    ok: true,
+    name: fields.name,
+    description: fields.description,
+    whenToUse: fields.whenToUse ?? null,
+    // Optional. A skill bundle with no package.json takes its version from here — that is
+    // what makes "publish an update" possible without inventing a second manifest.
+    version: typeof fields.version === 'string' && fields.version !== '' ? fields.version : null,
+  }
+}
+
+/**
+ * Locate the SKILL.md of a bundle: at the root, or under exactly one wrapping directory.
+ *
+ * Two DIFFERENT wrappers each holding a SKILL.md is ambiguous and returns null — the same
+ * "refuse rather than guess" rule the layout detection uses.
+ */
+function locateSkillFile(entries) {
+  const found = []
+  for (const [key, value] of entries) {
+    const parts = normaliseArchiveName(key).split('/')
+    if (parts[parts.length - 1] !== 'SKILL.md') continue
+    // Deeper than one wrapper is not a bundle root.
+    if (parts.length > 2) continue
+    found.push({ key, value, wrapper: parts.length === 2 ? parts[0] : null })
+  }
+  if (found.length !== 1) return null
+  return found[0]
+}
+
+/**
+ * Supply the manifest a skill bundle does not have.
+ *
+ * Plenty of skills are nothing but a `SKILL.md` — that is the format the ecosystem uses, and
+ * demanding a stub `package.json` next to it was this market's requirement, not the format's.
+ * So the manifest is SYNTHESISED here instead of being demanded, and injected into the
+ * archive so that everything downstream still sees exactly one shape.
+ *
+ * Two fields cannot be read off the frontmatter and are therefore explicit:
+ *
+ *  - **the name**: a scope is not decoration. Permission rules match on the package name, so
+ *    a grant written `@dsh-internal/*` will never match a bare `my-skill`. The frontmatter
+ *    name is the default, and `?name=` overrides it — which is how a publisher keeps their
+ *    existing rules working.
+ *  - **the version**: updates are compared by version, so a bundle that never declares one can
+ *    be published but never recognised as newer. `version:` in the frontmatter, or `?version=`,
+ *    otherwise `0.1.0`.
+ *
+ * @returns {{ ok: true, entries: Map<string, Buffer>, manifest: object, skillName: string }
+ *          | { ok: false, code: string, detail: string }
+ *          | null}  null means "not a skill bundle" — the caller keeps its own complaint.
+ */
+export function synthesiseSkillManifest(entries, { name = null, version = null } = {}) {
+  const skillFile = locateSkillFile(entries)
+  if (skillFile === null) return null
+
+  const front = parseSkillFrontmatter(skillFile.value.toString('utf8'))
+  if (front.ok === false) {
+    return { ok: false, code: front.code, detail: `这是技能包（含 SKILL.md），但 ${front.detail}` }
+  }
+
+  const resolvedName = String(name ?? front.name).trim()
+  if (!PACKAGE_NAME_RE.test(resolvedName)) {
+    return {
+      ok: false,
+      code: 'E_BAD_NAME',
+      detail: `包名 "${resolvedName}" 不合法。留空会用 SKILL.md 的 name（${front.name}）；`
+        + '要带作用域（例如 @dsh-internal/my-skill）请在发布表单里填，否则按作用域写的权限规则匹配不到它。',
+    }
+  }
+
+  const candidate = String(version ?? front.version ?? '0.1.0').trim()
+  if (parseVersion(candidate) === null) {
+    return {
+      ok: false,
+      code: 'E_BAD_VERSION',
+      detail: `版本 "${candidate}" 不是语义化版本（形如 1.0.0）。可以在发布表单里改，或写进 SKILL.md 的 frontmatter。`,
+    }
+  }
+
+  const manifest = {
+    name: resolvedName,
+    version: candidate,
+    description: front.description,
+    // `kind` is forced: a bundle carrying SKILL.md and no manifest IS a skill.
+    dsh: { market: { kind: 'skill', summary: front.description } },
+  }
+  const target = skillFile.wrapper === null ? 'package.json' : `${skillFile.wrapper}/package.json`
+  const next = new Map(entries)
+  next.set(target, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`))
+  return { ok: true, entries: next, manifest, skillName: front.name }
 }
 
 /**
@@ -354,23 +445,41 @@ export function readAnyArchive(buffer) {
  * @returns {{ ok: true, archive: Buffer, converted: boolean, from: 'targz'|'zip', strippedPrefix: string }
  *          | { ok: false, code: string, detail: string }}
  */
-export function normaliseArchive(buffer) {
+export function normaliseArchive(buffer, options = {}) {
   const raw = readAnyArchive(buffer)
   if (raw.ok === false) return raw
 
-  const layout = detectPackagePrefix(raw.entries.keys())
-  if (layout.ok === false) return layout
+  let entries = raw.entries
+  let synthesis = null
+  let layout = detectPackagePrefix(entries.keys())
+  if (layout.ok === false) {
+    /**
+     * No manifest anywhere. If this is a skill bundle, SUPPLY one rather than refusing.
+     *
+     * Plenty of skills are just a SKILL.md. Rejecting them with "归档内没有 package.json" told
+     * a publisher nothing they could act on — the requirement was this market's, not the
+     * format's, so the market is the side that should yield.
+     */
+    const made = synthesiseSkillManifest(entries, options)
+    if (made === null) return layout
+    if (made.ok === false) return made
+    entries = made.entries
+    synthesis = made
+    layout = detectPackagePrefix(entries.keys())
+    if (layout.ok === false) return layout
+  }
 
   const isZip = raw.format === 'zip'
-  if (!isZip && layout.prefix === '') {
-    return { ok: true, archive: buffer, converted: false, from: 'targz', strippedPrefix: '' }
+  if (!isZip && layout.prefix === '' && synthesis === null) {
+    return { ok: true, archive: buffer, converted: false, from: 'targz', strippedPrefix: '', synthesis: null }
   }
   return {
     ok: true,
-    archive: packTarGzEntries(stripPrefixFromEntries(raw.entries, layout.prefix)),
+    archive: packTarGzEntries(stripPrefixFromEntries(entries, layout.prefix)),
     converted: true,
     from: isZip ? 'zip' : 'targz',
     strippedPrefix: layout.prefix,
+    synthesis: synthesis === null ? null : { manifest: synthesis.manifest, skillName: synthesis.skillName },
   }
 }
 

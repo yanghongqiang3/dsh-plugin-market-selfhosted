@@ -755,8 +755,20 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       let archive = uploaded
       let convertedFromZip = false
       let normaliseNote = null
+      /**
+       * Hoisted out of the try block below: the preview is built after it, and a skill
+       * bundle's synthesised manifest has to be reported there.
+       */
+      let synthesised = null
       try {
-        const normalised = normaliseArchive(uploaded)
+        // `name` / `version` are supplied by the form. A skill bundle is often nothing but a
+        // SKILL.md, and its manifest is synthesised — these let the publisher control the two
+        // fields that cannot be read off the frontmatter (a scope for permission matching, and
+        // a version for updates).
+        const normalised = normaliseArchive(uploaded, {
+          name: url.searchParams.get('name'),
+          version: url.searchParams.get('version'),
+        })
         if (normalised.ok === false) {
           store.audit('artifact.reject', { code: normalised.code, by: who.username }, who.username)
           json(res, 400, { ok: false, code: normalised.code, detail: normalised.detail })
@@ -768,6 +780,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         normaliseNote = normalised.converted
           ? { from: normalised.from, strippedPrefix: normalised.strippedPrefix }
           : null
+        synthesised = normalised.synthesis ?? null
       } catch (error) {
         store.audit('artifact.reject', { reason: String(error?.message ?? error), by: who.username }, who.username)
         json(res, 400, { ok: false, code: 'E_BAD_ARCHIVE', detail: String(error?.message ?? error) })
@@ -816,6 +829,9 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         // and hash that follow are the STORED ones, not the uploaded ones.
         convertedFromZip,
         normalised: normaliseNote,
+        // Non-null when the archive had no package.json and one was synthesised for it, so the
+        // publisher sees exactly what will be registered before committing.
+        synthesised,
         uploadedBytes: uploaded.length,
         sizeBytes: archive.length,
         sha256: sha256(archive),

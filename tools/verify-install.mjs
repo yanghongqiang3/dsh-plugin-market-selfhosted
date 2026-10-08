@@ -1081,6 +1081,58 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   consoleSource2.includes('.zip')
     ? ok('控制台的文件选择框接受 zip')
     : fail('控制台不接受 zip —— 上传了也会被前端过滤掉')
+
+  /**
+   * A skill bundle that is only a SKILL.md must be publishable.
+   *
+   * The requirement for a stub `package.json` was this market's, not the format's — most
+   * skills simply do not have one — and it produced a dead end whose message named a file the
+   * publisher had no reason to expect. The manifest is synthesised instead.
+   */
+  const packSource2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'pack.js'), 'utf8')
+  packSource2.includes('synthesiseSkillManifest')
+    ? ok('只有 SKILL.md 的技能包会被补出 manifest')
+    : fail('没有 manifest 的技能包仍会被拒 —— 大多数技能就是这样')
+  const artifactsSource2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'artifacts.js'), 'utf8')
+  artifactsSource2.includes('synthesiseSkillManifest')
+    ? ok('  CLI 的目录发布路径也一样（两个入口不会各说各话）')
+    : fail('  CLI 路径没有合成 —— 控制台能发而 CLI 不能')
+  // The two fields that cannot be read off the frontmatter must be overridable.
+  const uploadRoute2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  uploadRoute2.includes("searchParams.get('name')") && uploadRoute2.includes("searchParams.get('version')")
+    ? ok('  name/version 可在发布时指定（作用域与版本无法从 frontmatter 推出）')
+    : fail('  不能指定 name/version —— 推导出的名字无法匹配作用域权限规则')
+  consoleSource2.includes('id="pub-name"') && consoleSource2.includes('id="pub-version"')
+    ? ok('  控制台有这两个可选输入')
+    : fail('  控制台没有这两个输入，发布者改不了推导结果')
+  // The synthesised manifest has to be REPORTED, not silently applied.
+  uploadRoute2.includes('synthesised,')
+    ? ok('  预检会报告补出的 manifest')
+    : fail('  补出的 manifest 被静默使用')
+  // One definition of the name rule, or synthesis and recording can disagree.
+  const layoutSource2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'layout.js'), 'utf8')
+  layoutSource2.includes('PACKAGE_NAME_RE') && artifactsSource2.includes('PACKAGE_NAME_RE')
+    ? ok('  包名规则只有一处定义（合成与入库不会各判各的）')
+    : fail('  包名规则重复定义 —— 合成可能造出库拒绝的名字')
+  const layoutSource3 = fs.readFileSync(path.join(dir, 'server', 'lib', 'layout.js'), 'utf8')
+  /**
+   * Import the exported rule and test it, rather than scraping the regex out of the source.
+   *
+   * Scraping kept the literal's own `/` delimiters, so the pattern under test was "starts and
+   * ends with a slash" and the check failed on a perfectly good name — a broken check
+   * reporting a FAILURE, which is the same class of mistake as the broken checks that report
+   * success, just louder.
+   */
+  const { PACKAGE_NAME_RE } = await import(pathToFileURL(path.join(dir, 'server', 'lib', 'layout.js')).href)
+  PACKAGE_NAME_RE.test('my-skill') && PACKAGE_NAME_RE.test('@dsh-internal/my-skill')
+    ? ok('  不带作用域的包名仍被接受（作用域是建议，不是要求）')
+    : fail('  合法包名被拒 —— 会挡住只想快速发布的技能')
+  !PACKAGE_NAME_RE.test('Not A Name') && !PACKAGE_NAME_RE.test('UPPER')
+    ? ok('  非法包名仍被拒')
+    : fail('  非法包名被接受了')
+  layoutSource3.includes('PACKAGE_NAME_RE')
+    ? ok('  规则确实定义在共享模块里')
+    : fail('  规则不在共享模块里')
 }
 
 /**

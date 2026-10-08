@@ -147,6 +147,23 @@
           <h2>选择归档</h2>
           <div class="form">
             <input type="file" id="pub-file" accept=".tar.gz,.tgz,.zip,application/gzip,application/zip" />
+            <!--
+              Optional, and only consulted when the archive has no package.json.
+
+              Most skills are nothing but a SKILL.md, so the service synthesises the manifest
+              from its frontmatter. These two fields cover the parts that CANNOT be read off
+              it: a scope (permission rules match on the package name, so `@dsh-internal/*`
+              never matches a bare `my-skill`) and a version (updates are compared by version,
+              so a bundle that never declares one can be published but never looks newer).
+            -->
+            <div class="form-row">
+              <label class="field">包名（可留空）
+                <input type="text" id="pub-name" placeholder="留空用 SKILL.md 的 name；要匹配作用域规则请填 @作用域/名字" />
+              </label>
+              <label class="field">版本（可留空）
+                <input type="text" id="pub-version" placeholder="留空用 frontmatter 的 version，否则 0.1.0" />
+              </label>
+            </div>
             <div class="form-row">
               <label class="field">通道
                 <select id="pub-channel">
@@ -782,6 +799,15 @@ function publishOptions() {
   const params = new URLSearchParams()
   if (channel) params.set('channel', channel)
   if (state) params.set('state', state)
+  /**
+   * Only meaningful when the archive has no package.json — the service reads them solely to
+   * fill the manifest it synthesises for a SKILL.md-only skill bundle. Sent only when filled
+   * in, so an empty box cannot override what the archive itself declares.
+   */
+  const name = $('pub-name').value.trim()
+  const version = $('pub-version').value.trim()
+  if (name) params.set('name', name)
+  if (version) params.set('version', version)
   return params
 }
 
@@ -839,9 +865,22 @@ async function doCheck() {
     ? `（上传的是 zip，${pendingPublish.uploadedBytes ?? 0} 字节；入库前会转成 tar.gz，`
       + `下面的字节数与 sha256 描述的是转换后的版本。）\n\n`
     : ''
+  /**
+   * Say when the manifest was MADE UP rather than read.
+   *
+   * A skill bundle that is nothing but a SKILL.md gets one synthesised, and the name and
+   * version in it decide whether permission rules match and whether clients see an update.
+   * Showing them here is the difference between a convenience and a silent guess.
+   */
+  const synth = pendingPublish?.synthesised
+  const derived = synth
+    ? `（归档里没有 package.json，已按 SKILL.md 补出一个：`
+      + `name=${synth.manifest.name}　version=${synth.manifest.version}。`
+      + `名字若没有作用域，按作用域写的权限规则匹配不到它；换名字或版本请在上面填写后重新预检。）\n\n`
+    : ''
   $('pub-preview').textContent =
     `将发布：${kindLabels[kind] ?? kind} ${pendingPublish?.name ?? ''}@${pendingPublish?.version ?? ''}\n`
-    + converted
+    + converted + derived
     + '\n'
     + JSON.stringify(result.body, null, 2)
   $('pub-preview').classList.remove('hidden')
