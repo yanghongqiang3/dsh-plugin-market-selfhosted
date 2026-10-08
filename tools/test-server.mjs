@@ -236,7 +236,23 @@ await call('POST', '/dsh-market/admin/artifacts/state', {
 })
 const afterRevoke = await call('GET', '/dsh-market/catalog', { token: aliceToken })
 const revokedEntry = afterRevoke.body.entries.find((item) => item.name === '@dsh-internal/dsh-plugin-demo')
-ok('撤回后不可安装', revokedEntry.canInstall === false && revokedEntry.reason === 'E_REVOKED', String(revokedEntry.reason))
+/**
+ * A revoked version is gone from the catalog, not merely flagged.
+ *
+ * The first version of this check asserted `canInstall: false` with reason `E_REVOKED`,
+ * which required the catalog to keep LISTING a revoked artifact. The client renders an
+ * 「更新到 X」 button whenever the catalog reports a version the install does not have,
+ * so listing it produced a button whose every click failed with E_REVOKED — the state
+ * was reported correctly and the UX was still broken.
+ *
+ * The catalog now selects the highest PUBLISHED version, so a revoked release simply
+ * stops being offered (and the previous good version, if any, takes its place — see
+ * `tools/probe-version-order.mjs`). The refusal itself is still enforced and checked
+ * below through a direct download.
+ */
+ok('撤回后该插件不再出现在 catalog 里', revokedEntry === undefined, JSON.stringify(revokedEntry ?? null))
+const revokedDownload = await call('GET', '/dsh-market/download?name=@dsh-internal/dsh-plugin-demo&version=1.2.3', { token: aliceToken })
+ok('撤回的版本仍可直接下载请求，但被拒绝', revokedDownload.status === 403, `${revokedDownload.status}/${revokedDownload.body?.code}`)
 
 // ------------------------------------------------------------- 4. 哈希防护
 

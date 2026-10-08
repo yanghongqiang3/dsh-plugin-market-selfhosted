@@ -240,8 +240,21 @@ function tarWithRawEntry(name, content, packageJson, typeFlag = '0') {
 console.log('\n--- 状态流转 ---')
 const asDraft = await cli(['publish', '--dir', makePackage('@dsh-internal/dsh-plugin-wip', '0.1.0'), '--state', 'draft'])
 ok('可发布为 draft', asDraft.code === 0, `code=${asDraft.code}`)
-const draftRow = artifacts.catalogRows().find((row) => row.name === '@dsh-internal/dsh-plugin-wip')
-ok('draft 状态已记录', draftRow?.status === 'draft', String(draftRow?.status))
+/**
+ * The draft is checked through `listVersions`, NOT the catalog.
+ *
+ * The catalog lists what may be INSTALLED, and a draft may not be installed, so it is
+ * absent from the catalog by design — asserting its presence there encoded the old
+ * behaviour, where the catalog showed every state and the client rendered an install
+ * button that `policy` then refused. The state is recorded either way; this proves it
+ * without depending on a listing the draft does not belong in.
+ */
+const draftRows = artifacts.listVersions('@dsh-internal/dsh-plugin-wip')
+ok('draft 状态已记录', draftRows[0]?.status === 'draft', String(draftRows[0]?.status))
+ok(
+  'draft 不出现在 catalog 里（不可安装，就不该被列出）',
+  artifacts.catalogRows().every((row) => row.name !== '@dsh-internal/dsh-plugin-wip'),
+)
 
 // draft must not be installable even when granted
 store.createGroup({ id: 'platform-test', name: 'platform', by: 'test' })

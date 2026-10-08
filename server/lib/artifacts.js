@@ -24,6 +24,89 @@ import { ArchiveError, collectFiles, inspectArchive, packTarGz, sha256 } from '.
 const NAME_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/
 export const ARTIFACT_STATES = ['draft', 'review', 'published', 'revoked']
 
+/**
+ * Version ordering — `semver`, restricted to what this market needs.
+ *
+ * WHY THIS EXISTS AT ALL, and it is a bug fix rather than a nicety:
+ *
+ * "Latest" used to mean `ORDER BY published_at DESC` — MOST RECENTLY PUBLISHED. That is
+ * not the same as the highest version, and the difference is a downgrade dressed as an
+ * upgrade. Measured (`tools/probe-version-order.mjs`) by publishing 2.0.0, then 1.5.0,
+ * then 1.0.0 — which is what happens when a hotfix is published from an older branch:
+ *
+ *     catalog reported 1.0.0
+ *     an install at 2.0.0 was offered 「更新到 1.0.0」
+ *     the unpinned download served 1.0.0
+ *
+ * The install page decides whether to show that button by comparing the catalog's
+ * version with the installed one, so this ordering IS the update mechanism.
+ *
+ * A second defect lived in the same expression: the ordering took no notice of `state`,
+ * so a REVOKED newest version was still reported as latest. `policy` refuses it
+ * (`E_REVOKED`) — but by then the user has already been shown a button that cannot work.
+ * Both are fixed by selecting over publishable versions only.
+ *
+ * Semver precedence, implemented per the spec's rules:
+ *   numeric identifiers compare numerically, alphanumerics lexically, a release outranks
+ *   any of its prereleases (1.0.0 > 1.0.0-rc.1), and a longer prerelease list outranks a
+ *   shorter equal prefix (1.0.0-alpha.1 > 1.0.0-alpha). Build metadata carries no
+ *   precedence and is ignored.
+ */
+const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+
+/** Parse into comparable parts, or `null` when the string is not a semantic version. */
+export function parseVersion(version) {
+  const match = VERSION_RE.exec(String(version ?? ''))
+  if (match === null) return null
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
+  }
+}
+
+/** Compare two prerelease identifier lists; `[]` (a release) outranks any of them. */
+function comparePrerelease(a, b) {
+  if (a.length === 0 && b.length === 0) return 0
+  if (a.length === 0) return 1
+  if (b.length === 0) return -1
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const left = a[i]
+    const right = b[i]
+    if (left === undefined) return -1
+    if (right === undefined) return 1
+    const leftNumeric = /^\d+$/.test(left)
+    const rightNumeric = /^\d+$/.test(right)
+    if (leftNumeric && rightNumeric) {
+      if (Number(left) !== Number(right)) return Number(left) < Number(right) ? -1 : 1
+      continue
+    }
+    // Numeric identifiers always have lower precedence than alphanumeric ones.
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
+    if (left !== right) return left < right ? -1 : 1
+  }
+  return 0
+}
+
+/** `-1` / `0` / `1` for highest-first sorting. Unparseable versions sort lowest. */
+export function compareVersions(a, b) {
+  const left = parseVersion(a)
+  const right = parseVersion(b)
+  if (left === null || right === null) {
+    if (left === null && right === null) return String(a).localeCompare(String(b))
+    return left === null ? -1 : 1
+  }
+  for (const key of ['major', 'minor', 'patch']) {
+    if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1
+  }
+  return comparePrerelease(left.prerelease, right.prerelease)
+}
+
+/** Only an artifact in this state may be installed (mirrors `policy.js`). */
+const PUBLISHABLE = 'published'
+
+
 export class Artifacts {
   constructor(db, storageDir) {
     this.db = db
@@ -85,6 +168,12 @@ export class Artifacts {
   record(archive, { pkg, meta, publishedBy, state, channel, fileCount, via = 'directory' }) {
     if (!pkg?.name || !pkg?.version) throw new Error('package.json needs name and version')
     if (!NAME_RE.test(pkg.name)) throw new Error(`invalid package name: ${pkg.name}`)
+    // Rejected here rather than at read time: an artifact that cannot be ORDERED cannot
+    // be offered as an update, and a version that is not semver has no defined order.
+    // Failing the publish keeps that out of the market instead of degrading the catalog.
+    if (parseVersion(pkg.version) === null) {
+      throw new Error(`package.json version "${pkg.version}" is not a semantic version (expected MAJOR.MINOR.PATCH[-prerelease])`)
+    }
 
     const name = pkg.name
     const version = pkg.version
@@ -157,36 +246,62 @@ export class Artifacts {
     )
   }
 
-  /** Newest version of a name, optionally pinned to a channel. */
+  /**
+   * Highest installable version of a name, optionally pinned to a channel.
+   *
+   * Ordering happens in JS via `compareVersions`, NOT in SQL: SQLite cannot order
+   * semantic versions (`ORDER BY version DESC` puts 1.9.0 above 1.10.0), and the old
+   * `ORDER BY published_at DESC` put a freshly published 1.0.0 above 2.0.0.
+   *
+   * Only `published` artifacts participate, so a revoked newest version cannot be
+   * reported as the latest — which previously produced an 「更新到 X」 button that
+   * `policy` then refused with `E_REVOKED`.
+   */
   latest(name, channel = null) {
-    const row = channel
-      ? this.db
-          .prepare('SELECT * FROM artifacts WHERE name = ? AND channel = ? ORDER BY published_at DESC LIMIT 1')
-          .get(name, channel)
-      : this.db
-          .prepare('SELECT * FROM artifacts WHERE name = ? ORDER BY published_at DESC LIMIT 1')
-          .get(name)
-    return rowToArtifact(row)
+    const rows = channel
+      ? this.db.prepare('SELECT * FROM artifacts WHERE name = ? AND channel = ?').all(name, channel)
+      : this.db.prepare('SELECT * FROM artifacts WHERE name = ?').all(name)
+    return this.highest(rows)
   }
 
-  /** One row per plugin name — its newest version — which is what the catalog shows. */
+  /** The highest-versioned publishable artifact among raw rows, or undefined. */
+  highest(rows) {
+    let best = null
+    for (const row of rows) {
+      if (row.state !== PUBLISHABLE) continue
+      if (parseVersion(row.version) === null) continue
+      if (best === null || compareVersions(row.version, best.version) > 0) best = row
+    }
+    return rowToArtifact(best)
+  }
+
+  /**
+   * One row per plugin name — its highest publishable version — which is what the
+   * catalog shows and therefore what drives every 「更新到 X」 button.
+   */
   catalogRows() {
-    return this.db
-      .prepare(
-        `SELECT a.* FROM artifacts a
-         JOIN (SELECT name, MAX(published_at) AS newest FROM artifacts GROUP BY name) m
-           ON m.name = a.name AND m.newest = a.published_at
-         ORDER BY a.name`,
-      )
-      .all()
-      .map(rowToArtifact)
+    const rows = this.db.prepare('SELECT * FROM artifacts').all()
+    const byName = new Map()
+    for (const row of rows) {
+      const list = byName.get(row.name)
+      if (list === undefined) byName.set(row.name, [row])
+      else list.push(row)
+    }
+    const out = []
+    for (const [, list] of byName) {
+      const best = this.highest(list)
+      if (best !== null && best !== undefined) out.push(best)
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
   }
 
+  /** Every version of a name, oldest first — for auditing, including non-published. */
   listVersions(name) {
     return this.db
-      .prepare('SELECT * FROM artifacts WHERE name = ? ORDER BY published_at DESC')
+      .prepare('SELECT * FROM artifacts WHERE name = ?')
       .all(name)
       .map(rowToArtifact)
+      .sort((a, b) => compareVersions(a.version, b.version))
   }
 
   setState(name, version, channel, state) {

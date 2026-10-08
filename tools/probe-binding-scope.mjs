@@ -8,7 +8,7 @@
  * reasoning about it. Binding is a 1:1 RECORD; the question is whether it is also an
  * ENFORCEMENT point.
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from '../server/index.mjs'
@@ -104,4 +104,7 @@ console.log('  · 登录**不改变绑定**，也不能用已绑定的市场账�
 console.log('  · 所以绑定目前是「归属记录」，不是「使用限制」。')
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')
 app.server.close()
+app.db.close()
+// Remove the scratch directory — this probe used to leave one behind on every run.
+rmSync(workDir, { recursive: true, force: true })
 process.exit(problems ? 1 : 0)

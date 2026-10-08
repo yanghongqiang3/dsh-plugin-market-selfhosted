@@ -8,7 +8,7 @@
  * access, and does a group need a rule mentioning THAT plugin, or does a pattern rule
  * covering it suffice?
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from '../server/index.mjs'
@@ -45,7 +45,6 @@ const alice = (await call('POST', '/dsh-market/auth/login', { username: 'alice',
 // Publish an artifact with a distinctive name, straight through the store (the HTTP
 // upload path is covered elsewhere; this is about the GRANT chain).
 const pluginsDir = join(workDir, 'plugins')
-const { mkdirSync, writeFileSync } = await import('node:fs')
 mkdirSync(join(pluginsDir, 'pkg-billing'), { recursive: true })
 writeFileSync(
   join(pluginsDir, 'pkg-billing', 'package.json'),
@@ -95,4 +94,7 @@ console.log('  · 授权 = 组 + glob 规则，命中即生效，**不需要点�
 console.log('  · 所以发布表单要权限组，等于把「制品存在」和「谁能装」两件事混在一起。')
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')
 app.db.close()
+// Remove the scratch directory. Every one of these probes creates one; the first three
+// did not clean up and quietly left a directory behind on every run.
+rmSync(workDir, { recursive: true, force: true })
 process.exit(problems ? 1 : 0)

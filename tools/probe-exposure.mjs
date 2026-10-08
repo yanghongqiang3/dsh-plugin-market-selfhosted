@@ -2,7 +2,7 @@
 // route table's `auth` field. The admin routes are registered `auth: 'none'` because
 // their handlers resolve the session themselves — so the field says nothing about
 // whether a caller can get in.
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from '../server/index.mjs'
@@ -69,4 +69,7 @@ for (const line of open) console.log(`  ${line}`)
 console.log(expected ? `\nRESULT: ${expected} problem(s)` : '\nRESULT: all checks passed')
 
 app.server.close()
+app.db.close()
+// Remove the scratch directory — this probe used to leave one behind on every run.
+rmSync(workDir, { recursive: true, force: true })
 process.exit(expected ? 1 : 0)

@@ -131,15 +131,48 @@ npm 包的 tarball 必须把**所有条目放在一个 `package/` 目录下**。
 
 ---
 
-## 5. 升级
+## 5. 升级（更新插件自己）
 
-重新打包、把新 tgz 给对方、再执行一次 `add` 即可（pnpm 会覆盖）。然后重启 DSH。
+**必须升 `package.json` 里的 `version`，否则更新会静默不生效。**
 
 ```powershell
+# ① 开发机：先改版本号，再打包
+#    package.json  "version": "0.1.0"  ->  "0.1.1"
 node tools\pack-dist.mjs
-# 对方机器：
-dsh plugin --profile <profile> add ".\dsh-plugin-marketplace-0.1.0.tgz"
+#   -> dist\dsh-plugin-marketplace-0.1.1.tgz
+
+# ② 每台客户端：装新包，然后重启 DSH
+dsh plugin --profile <profile> add ".\dsh-plugin-marketplace-0.1.1.tgz"
 ```
+
+> **为什么版本号是必须的——实测过一次，很反直觉：**
+>
+> 不升版本号、只把同一个路径下的 tgz 重新打好再 `add`，**文件不会变**。
+> 实测：装 0.1.0（`lib/plugin.js` 哈希 `0F571A46…`），原地重打一个内容不同的 0.1.0，
+> 再 `add` 同一路径 —— 哈希仍是 `0F571A46…`，新内容从未落盘。
+> pnpm 按 tarball 路径 + 版本号判定，**不看内容**。
+>
+> 升到 0.2.0 后同样的操作立刻生效：版本变了、哈希变成 `42C4C1CF…`、新内容到位。
+>
+> 所以"更新没生效"的第一嫌疑永远是**忘了改版本号**。
+>
+> 实在不能升版本号时，退路是让 pnpm 忘掉这个依赖：
+> `dsh plugin --profile <p> remove dsh-plugin-marketplace` 再 `add`，
+> 或者删掉 profile 的 `node_modules/.pnpm` 后重装。
+
+**装完必须重启 DSH。** 包是启动时读的，不重启就还是旧代码在跑。
+
+**验证更新是否真的生效**（别只看命令有没有报错）：
+
+```powershell
+# 版本号对不对
+(Get-Content "$env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-plugin-marketplace\package.json" -Raw | ConvertFrom-Json).version
+# 文件是不是新的（哈希应当与开发机打包时的内容对应）
+Get-FileHash "$env:USERPROFILE\.dsh\profiles\<profile>\node_modules\dsh-plugin-marketplace\lib\plugin.js" -Algorithm SHA256
+```
+
+> **改了什么要重打包**见 §8。控制台（`web/console.*`）与 `server/**` 属于服务端，
+> 改它们**不需要**动客户端包。
 
 ---
 
