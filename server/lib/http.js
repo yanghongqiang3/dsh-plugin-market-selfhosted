@@ -703,6 +703,13 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       const preview = {
         name: inspection.pkg.name,
         version: inspection.pkg.version,
+        /**
+         * Shown in the pre-check so a publisher sees "this is a skill" BEFORE committing.
+         *
+         * Reaching here with kind=skill already means the bundle is well-formed: the
+         * inspection refuses a skill whose SKILL.md is missing, unparseable, or badly named.
+         */
+        kind: inspection.kind,
         channel: channel ?? inspection.meta.channel ?? 'stable',
         state: state ?? inspection.meta.state ?? 'published',
         owner: inspection.meta.owner ?? inspection.pkg.dsh?.market?.owner ?? '',

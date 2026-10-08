@@ -82,12 +82,28 @@ const publishSkill = (name, { frontmatter = null, extra = {}, version = '1.0.0' 
 
 const GOOD = '---\nname: release-checklist\ndescription: 发布前的检查清单。\nwhenToUse: 准备发布时\n---\n\n步骤一：确认版本号。\n'
 publishSkill('@dsh-internal/skill-release-checklist', { frontmatter: GOOD })
-publishSkill('@dsh-internal/skill-bad-name', {
-  frontmatter: '---\nname: Not_Kebab_Case\ndescription: 名字非法。\n---\n\nbody\n',
-})
-// No SKILL.md at all. The archive is still a valid PACKAGE (it has package.json), so it
-// reaches the install route, where the skill check has to refuse it.
-publishSkill('@dsh-internal/skill-no-file', {})
+
+/**
+ * These two CANNOT be published any more.
+ *
+ * The service now validates a skill at publish time, so a malformed one never reaches the
+ * catalog — which is the point of that change, and it also means the INSTALL-time checks
+ * are no longer reachable through the market. They stay in the client as a second line of
+ * defence (a hand-copied tarball, or a service older than the client), and the preflight
+ * asserts the codes still exist; here we assert the earlier, better refusal.
+ */
+const publishRejections = []
+for (const [label, options] of [
+  ['没有 SKILL.md', {}],
+  ['name 不是 kebab-case', { frontmatter: '---\nname: Not_Kebab_Case\ndescription: 名字非法。\n---\n\nbody\n' }],
+]) {
+  try {
+    publishSkill(`@dsh-internal/skill-bad-${publishRejections.length}`, options)
+    publishRejections.push({ label, code: '(accepted!)' })
+  } catch (error) {
+    publishRejections.push({ label, code: error.code ?? String(error.message) })
+  }
+}
 
 // ------------------------------------------------------------------ the plugin
 const { apply } = await import('../lib/plugin.js')
@@ -239,19 +255,15 @@ ok('  这次拒绝不影响别人已装的东西', afterDenial.entries.filter((e
   JSON.stringify(afterDenial.entries.map((e) => `${e.kind}:${e.name}`)))
 
 console.log('')
-console.log('--- 非法技能被拒（不是半装）---')
-const noFile = await invoke('/dsh-market/install', {
-  token: alice, name: entry('skill-no-file').name, version: entry('skill-no-file').version,
-  sha256: entry('skill-no-file').sha256, channel: entry('skill-no-file').channel,
-})
-ok('没有 SKILL.md 时拒绝安装', noFile.body?.ok === false, `${noFile.body?.code}`)
-ok('  且没有留下目录', !existsSync(skillDirForName(entry('skill-no-file').name)))
-const badName = await invoke('/dsh-market/install', {
-  token: alice, name: entry('skill-bad-name').name, version: entry('skill-bad-name').version,
-  sha256: entry('skill-bad-name').sha256, channel: entry('skill-bad-name').channel,
-})
-ok('非法 kebab-case 名称被拒', badName.body?.code === 'E_SKILL_BAD_NAME', String(badName.body?.code))
-ok('  且没有留下目录', !existsSync(skillDirForName(entry('skill-bad-name').name)))
+console.log('--- 残缺的技能在发布时就被拒（安装时的检查仍在，作为第二道）---')
+ok('没有 SKILL.md 的包发布不了', publishRejections[0]?.code === 'E_SKILL_MISSING', String(publishRejections[0]?.code))
+ok('name 非法的包发布不了', publishRejections[1]?.code === 'E_SKILL_BAD_NAME', String(publishRejections[1]?.code))
+// Neither reached the catalog, so neither can be installed and neither left a directory.
+const catalogNow = await call('GET', '/dsh-market/catalog', undefined, alice)
+ok('  它们没有进入目录', catalogNow.body.entries.every((e) => !/skill-bad-/.test(e.name)),
+  JSON.stringify(catalogNow.body.entries.map((e) => e.name)))
+ok('  也没有在磁盘上留下东西', !existsSync(skillDirForName('@dsh-internal/skill-bad-0')))
+ok('  客户端仍保留安装时的第二道检查（发布路径之外也能拦住）', readFileSync('lib/plugin.js', 'utf8').includes('E_SKILL_BAD_NAME'))
 
 console.log('')
 console.log('--- 已装列表要认得它 ---')

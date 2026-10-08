@@ -976,6 +976,53 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     : fail('  两种情况的日志无法区分 —— 排查时会误判')
 }
 
+/**
+ * The SERVICE knows what an artifact is.
+ *
+ * `dsh.market.kind` used to exist only inside each package.json, so the console could not
+ * label an artifact and could not tell a skill from a plugin — and a skill bundle with no
+ * `SKILL.md` published cleanly, listed cleanly, and failed on someone's machine at install
+ * time. The two publish paths also disagreed: the CLI's directory path skipped
+ * `inspectArchive` entirely.
+ */
+{
+  const packSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'pack.js'), 'utf8')
+  const artifactsSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'artifacts.js'), 'utf8')
+  const dbSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'db.js'), 'utf8')
+  const consoleSource = fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+
+  packSource.includes("'skill'") && packSource.includes("'bundle'") && packSource.includes("'plugin'")
+    ? ok('服务端识别 plugin / bundle / skill 三种类型')
+    : fail('服务端不区分制品类型')
+  packSource.includes('E_SKILL_MISSING')
+    ? ok('  发布时就拒绝没有 SKILL.md 的技能')
+    : fail('  缺 SKILL.md 的技能能发布出去 —— 要到客户端安装才失败')
+  packSource.includes('parseSkillFrontmatter')
+    ? ok('  发布时校验 frontmatter 与 kebab-case 名字')
+    : fail('  发布时不校验 frontmatter')
+  // The CLI path must inspect too, or the two publish paths disagree.
+  const publishFromDir = /publishFromDirectory\(packageDir[\s\S]*?\n  \}/.exec(artifactsSource)?.[0] ?? ''
+  if (publishFromDir === '') {
+    fail('找不到 publishFromDirectory')
+  } else if (publishFromDir.includes('inspectArchive')) {
+    ok('  CLI 目录路径与上传路径走同一套校验')
+  } else {
+    fail('  CLI 目录路径跳过了校验 —— 两条发布路径会给出不同答案')
+  }
+  dbSource.includes('ADD COLUMN kind')
+    ? ok('  旧数据库开机会补上 kind 列')
+    : fail('  没有 kind 列的迁移 —— 老库会读不出类型')
+  dbSource.includes('kind: row.kind')
+    ? ok('  读行时带出 kind')
+    : fail('  读行时不带 kind —— 接口拿不到类型')
+  consoleSource.includes('col-kind') && consoleSource.includes("skill: '技能'")
+    ? ok('  控制台制品列表标注类型')
+    : fail('  控制台看不出哪个是技能')
+  consoleSource.includes('将发布')
+    ? ok('  发布预检先说明将要发布的是哪种制品')
+    : fail('  发布预检不说明制品类型')
+}
+
 resolveSpec(PKG)
 resolveSpec(`${PKG}/plugin`)
 

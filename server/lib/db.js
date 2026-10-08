@@ -154,6 +154,20 @@ function migrate(db) {
   if (!columns.some((row) => row.name === 'secret_hash')) {
     db.exec('ALTER TABLE dsh_bindings ADD COLUMN secret_hash TEXT')
   }
+
+  /**
+   * What an artifact IS: `plugin`, `bundle` or `skill`.
+   *
+   * This lived only inside each package's `package.json`, so the service could not see it —
+   * the console could not label an artifact, and a skill bundle missing its `SKILL.md`
+   * published fine and only failed when someone tried to install it.
+   */
+  const artifactColumns = db.prepare('PRAGMA table_info(artifacts)').all()
+  if (!artifactColumns.some((row) => row.name === 'kind')) {
+    // Rows predating the column are plugins or bundles, which installed the same way;
+    // 'plugin' is the honest default rather than NULL.
+    db.exec("ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'plugin'")
+  }
 }
 
 /** Rows -> plain objects with the field names the HTTP layer speaks. */
@@ -196,5 +210,8 @@ export function rowToArtifact(row) {
     sizeBytes: row.size_bytes,
     publishedAt: row.published_at,
     publishedBy: row.published_by,
+    // `plugin` | `bundle` | `skill` — the console labels and filters on this, and it is how
+    // a skill shows up as a skill instead of an indistinguishable package.
+    kind: row.kind ?? 'plugin',
   }
 }

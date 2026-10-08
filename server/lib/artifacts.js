@@ -72,7 +72,30 @@ export class Artifacts {
     if (files.length === 0) throw new Error(`nothing to publish in ${dir}`)
     const archive = packTarGz(dir, files)
 
-    return this.record(archive, { pkg, meta, publishedBy, state, channel, fileCount: files.length })
+    /**
+     * Inspect the packed archive rather than trusting the directory.
+     *
+     * This path used to skip `inspectArchive` entirely, so it was STRICTER on upload than on
+     * the CLI: a bundle whose `dsh.bundle.patch` file was missing, or a skill without
+     * `SKILL.md`, could be published from disk and refused as an upload. Two publish paths
+     * that disagree about what a valid package is will eventually ship one of each.
+     */
+    const inspection = inspectArchive(archive)
+    if (!inspection.ok) {
+      const error = new Error(inspection.detail ?? inspection.code)
+      error.code = inspection.code
+      throw error
+    }
+
+    return this.record(archive, {
+      pkg,
+      meta,
+      kind: inspection.kind,
+      publishedBy,
+      state,
+      channel,
+      fileCount: files.length,
+    })
   }
 
   /**
@@ -90,6 +113,7 @@ export class Artifacts {
     return this.record(archive, {
       pkg: inspection.pkg,
       meta: inspection.meta,
+      kind: inspection.kind,
       publishedBy,
       state,
       channel,
@@ -99,7 +123,7 @@ export class Artifacts {
   }
 
   /** Shared tail of both publish paths: validate identity, write bytes, upsert row. */
-  record(archive, { pkg, meta, publishedBy, state, channel, fileCount, via = 'directory' }) {
+  record(archive, { pkg, meta, kind = 'plugin', publishedBy, state, channel, fileCount, via = 'directory' }) {
     if (!pkg?.name || !pkg?.version) throw new Error('package.json needs name and version')
     if (!NAME_RE.test(pkg.name)) throw new Error(`invalid package name: ${pkg.name}`)
     // Rejected here rather than at read time: an artifact that cannot be ORDERED cannot
@@ -125,14 +149,14 @@ export class Artifacts {
     this.db
       .prepare(
         `INSERT INTO artifacts (name, version, channel, state, owner, summary, dsh_range,
-                                permissions, sha256, size_bytes, stored_path, published_at, published_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                permissions, sha256, size_bytes, stored_path, published_at, published_by, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name, version, channel) DO UPDATE SET
            state = excluded.state, owner = excluded.owner, summary = excluded.summary,
            dsh_range = excluded.dsh_range, permissions = excluded.permissions,
            sha256 = excluded.sha256, size_bytes = excluded.size_bytes,
            stored_path = excluded.stored_path, published_at = excluded.published_at,
-           published_by = excluded.published_by`,
+           published_by = excluded.published_by, kind = excluded.kind`,
       )
       .run(
         name,
@@ -148,6 +172,7 @@ export class Artifacts {
         target,
         Date.now(),
         publishedBy,
+        kind,
       )
 
     this.db

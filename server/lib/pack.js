@@ -200,15 +200,96 @@ export function inspectArchive(buffer) {
     }
   }
 
+  /**
+   * What this archive IS.
+   *
+   * The client has always decided this at install time from `dsh.market.kind`, so the
+   * service knew nothing — the console could not label an artifact, and a skill bundle
+   * missing its `SKILL.md` published fine, listed fine, and only failed at the very last
+   * step on someone's machine. Recording it here moves that failure to publish time.
+   */
+  const kind =
+    pkg?.dsh?.market?.kind === 'skill'
+      ? 'skill'
+      : bundleDecl !== undefined && bundleDecl !== null
+        ? 'bundle'
+        : 'plugin'
+
+  if (kind === 'skill') {
+    /**
+     * A skill is a directory containing SKILL.md, plus whatever it references.
+     *
+     * Checked HERE rather than only on the client: the two must not disagree about what a
+     * valid skill is, and a publisher is the one who can still fix it.
+     */
+    const skillFile = files2.get('SKILL.md')
+    if (skillFile === undefined) {
+      return {
+        ok: false,
+        code: 'E_SKILL_MISSING',
+        detail: '声明 dsh.market.kind=skill，但归档内没有 SKILL.md',
+      }
+    }
+    const front = parseSkillFrontmatter(skillFile.toString('utf8'))
+    if (!front.ok) return { ok: false, code: front.code, detail: front.detail }
+    // The client's install-time check uses the same rule; a mismatch here would mean the
+    // console accepted something the client will refuse.
+    if (!SKILL_NAME_RE.test(front.name)) {
+      return {
+        ok: false,
+        code: 'E_SKILL_BAD_NAME',
+        detail: `SKILL.md 的 name "${front.name}" 不是 kebab-case（只允许小写字母、数字与连字符）`,
+      }
+    }
+  }
+
   return {
     ok: true,
     pkg,
     meta,
+    kind,
     // `packagePrefix` lets a caller re-pack or extract with the original layout.
     packagePrefix: prefix,
     files: [...files2.keys()].filter((name) => files2.get(name) !== null),
     bytes: buffer.length,
   }
+}
+
+/** The registry's rule for a skill's catalog name, mirrored from `dsh-skill`. */
+const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/**
+ * Parse a SKILL.md frontmatter block — the same small parser the host plugin uses.
+ *
+ * Deliberately duplicated rather than shared: the two sides run in different processes and
+ * are packed as different artifacts (`server/lib/version.js` is shared because the
+ * comparison MUST agree; this must merely be consistent, and a shared file would have to be
+ * threaded through both packers for no gain). If the rules ever diverge, the publish-time
+ * check is the stricter one, which is the safe direction.
+ */
+export function parseSkillFrontmatter(text) {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text)
+  if (match === null) {
+    return { ok: false, code: 'E_SKILL_BAD_FRONTMATTER', detail: 'SKILL.md 没有以 --- 包起来的 frontmatter' }
+  }
+  const fields = {}
+  for (const line of match[1].split(/\r?\n/)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue
+    const pair = /^([A-Za-z][\w-]*)\s*:\s*(.*)$/.exec(line)
+    if (pair === null) continue
+    let value = pair[2].trim()
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1)
+    }
+    fields[pair[1]] = value
+  }
+  if (typeof fields.name !== 'string' || fields.name === '') {
+    return { ok: false, code: 'E_SKILL_BAD_FRONTMATTER', detail: 'SKILL.md 的 frontmatter 缺少 name' }
+  }
+  if (typeof fields.description !== 'string' || fields.description === '') {
+    return { ok: false, code: 'E_SKILL_BAD_FRONTMATTER', detail: 'SKILL.md 的 frontmatter 缺少 description' }
+  }
+  return { ok: true, name: fields.name, description: fields.description, whenToUse: fields.whenToUse ?? null }
 }
 
 /** Round-trippable diagnostic used by tests: list the entries of an archive. */

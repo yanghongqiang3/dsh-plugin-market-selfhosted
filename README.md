@@ -416,6 +416,7 @@ POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artif
 |---|---|---|
 | 谁来装载 | cordis loader，启动时 mount | **没有 loader**，agent 按需读取 |
 | 安装时写什么 | profile 的 `cordis.patch.yml` 插一行（或 `dsh.profile.bundles`） | **什么都不写**，只放文件 |
+| 发布时服务端记录 | `kind: "plugin"` 或 `"bundle"` | `kind: "skill"`（据此标注与校验） |
 | 放在哪 | `<profile>/node_modules/<包名>` | `<profile>/.dsh-market-skills/<包名扁平化>` |
 | 怎么进会话 | loader 自动 mount | 宿主插件启动时 `ctx.skills.register` |
 | 生效 | **重启 DSH**（loader 只在启动时读） | **即时**（轮询目录，装完就进目录） |
@@ -448,6 +449,41 @@ whenToUse: 准备发布时            # 可选
 
 然后照常发布（`node server/cli.mjs publish --dir <目录>`），客户端就会在目录里看到它，
 安装按钮与插件完全一样。
+
+#### 跑全套
+
+```powershell
+node tools/run-all.mjs            # 全部
+node tools/run-all.mjs skill      # 只跑名字里含 skill 的
+```
+
+**别再用「数 ok 行」的临时脚本。** 我这么干过一次：`probe-skill-install.mjs` 在第一行就崩了
+（那次改动让发布时校验开始拒绝它自己的夹具），于是它输出 `ok=0 FAIL=0`，
+汇总脚本报出「565 通过、0 失败」——而总数其实比改动前**少了 15**，尽管刚加了 27 项断言。
+
+**一个什么都没输出的套件不是通过的套件，是没有跑起来的套件。** 所以 `run-all.mjs` 把下面
+任一条都算失败：退出码非 0、没有打印 `RESULT:` 行、出现 `FAIL` 行，并以 `INCOMPLETE`
+和退出码 1 结束，明确告诉你总数不可信。
+
+#### 控制台认识技能
+
+服务端在**发布时**就记录类型（`plugin` / `bundle` / `skill`），所以：
+
+- **制品列表**有一列「类型」，技能会标出来；发布**预检**第一行就写明「将发布：技能 xxx@1.0.0」。
+- **残缺的技能在发布时就被拒绝**，不再等到客户端安装那一刻：
+
+  | 错误 | 情形 |
+  |---|---|
+  | `E_SKILL_MISSING` | 声明了 `kind: "skill"` 却没有 `SKILL.md` |
+  | `E_SKILL_BAD_FRONTMATTER` | 没有 frontmatter，或缺 `name` / `description` |
+  | `E_SKILL_BAD_NAME` | `name` 不是 kebab-case |
+
+  在此之前，这样的包**能发布、能出现在目录里、能点安装**，然后在最后一步失败——
+  而发布者早已拿不到反馈。
+
+- **CLI 与上传走同一套校验。** 此前 `publish --dir` 完全跳过检查，比上传还宽松：
+  连 `dsh.bundle.patch` 指向的文件缺失都能从目录发出去，同样的包上传却会被拒。
+- 旧数据库开机会自动补上 `kind` 列，历史行按 `plugin` 读出。
 
 #### 为什么放市场自己的目录，不放 `~/.dsh/skills`
 

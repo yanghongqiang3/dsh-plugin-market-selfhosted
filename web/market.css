@@ -133,6 +133,14 @@
   .tr > .grow{flex:2 1 0}
   .tr > .col-role{flex:0 0 56px}
   .tr > .col-status{flex:0 0 64px}
+  /**
+   * Wide enough for the longest label ("组合包" — three CJK glyphs, so ~3em plus padding).
+   * A `flex-basis` narrower than the content does not truncate the text; it pushes the other
+   * columns out of alignment with the header, which is exactly the defect the fixed basis on
+   * these columns exists to prevent.
+   */
+  .tr > .col-kind{flex:0 0 66px;color:var(--label2)}
+  .tr > .kind-skill{color:var(--brand)}
   .tr > .col-groups{flex:0 0 132px}
   .tr > .col-bind{flex:1 1 0;color:var(--label2)}
   /**
