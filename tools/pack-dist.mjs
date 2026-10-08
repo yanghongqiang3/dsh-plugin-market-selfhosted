@@ -1,0 +1,97 @@
+/**
+ * Pack this plugin into an installable tarball.
+ *
+ *   node tools/pack-dist.mjs [outFile]
+ *
+ * Produces a `.tar.gz` a DSH client installs with one command:
+ *
+ *   dsh plugin --profile <name> add ./dist/dsh-plugin-marketplace-0.1.0.tgz
+ *
+ * WHY THE `package/` PREFIX IS LOAD-BEARING
+ *
+ * An npm tarball must place every entry under a single `package/` directory; that is
+ * the convention npm and pnpm use to find the package root. Verified on this machine,
+ * both ways:
+ *
+ *   entries at the root (`lib/plugin.js`)
+ *     -> pnpm installs `plugin.js` at the package root. The `lib/` segment is LOST,
+ *        package.json's `exports` point at files that do not exist, and both loader
+ *        rows fail with `failed to import`.
+ *   entries under `package/` (`package/lib/plugin.js`)
+ *     -> correct layout, both rows activate, the sidebar entry renders.
+ *
+ * So the archive is built from a STAGING directory whose only child is `package/`,
+ * rather than by prefixing entry names, because the packer reads paths relative to its
+ * root and would not find a prefixed path there.
+ *
+ * This is a DIFFERENT format from the market's stored artifacts: those are flat
+ * (root-level `package.json`, no prefix), because `server/lib/pack.js` reads
+ * `package.json` at the archive root. Keep the two apart — see `docs/distributing.md`.
+ */
+import { mkdtempSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { packTarGz } from '../server/lib/pack.js'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const ROOT = resolve(HERE, '..')
+
+/** Everything a client needs, and nothing that only matters while developing here. */
+const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
+const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
+
+const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
+const out = resolve(process.argv[2] ?? join(ROOT, 'dist', `${pkg.name}-${pkg.version}.tgz`))
+
+const stage = mkdtempSync(join(tmpdir(), 'dsh-pack-'))
+try {
+  const inner = join(stage, 'package')
+  mkdirSync(inner, { recursive: true })
+
+  for (const item of INCLUDE) {
+    const from = join(ROOT, item)
+    let st
+    try { st = statSync(from) } catch { continue }
+    const to = join(inner, item)
+    if (st.isDirectory()) {
+      // `filter` runs per entry; dropping by basename keeps `node_modules` out at any
+      // depth without walking the tree twice.
+      cpSync(from, to, { recursive: true, filter: (src) => !SKIP.has(src.split(/[\\/]/).pop()) })
+    } else {
+      mkdirSync(dirname(to), { recursive: true })
+      copyFileSync(from, to)
+    }
+  }
+
+  // Enumerate what actually landed in the staging tree, so the archive can never list
+  // a file the copy step skipped.
+  const entries = []
+  const walk = (dir, prefix) => {
+    for (const name of readdirSync(dir)) {
+      const rel = prefix === '' ? name : `${prefix}/${name}`
+      if (statSync(join(dir, name)).isDirectory()) walk(join(dir, name), rel)
+      else entries.push(rel)
+    }
+  }
+  walk(stage, '')
+
+  const atRoot = entries.filter((entry) => !entry.startsWith('package/'))
+  if (atRoot.length > 0) {
+    throw new Error(`staging tree has entries outside package/: ${atRoot.join(', ')}`)
+  }
+
+  const archive = packTarGz(stage, entries)
+  mkdirSync(dirname(out), { recursive: true })
+  writeFileSync(out, archive)
+
+  console.log(`${pkg.name}@${pkg.version}`)
+  console.log(`  文件      ${entries.length} 个（全部在 package/ 下）`)
+  console.log(`  归档      ${out}`)
+  console.log(`  大小      ${archive.length} B`)
+  console.log('')
+  console.log('安装到某个 profile：')
+  console.log(`  dsh plugin --profile <name> add "${out}"`)
+} finally {
+  rmSync(stage, { recursive: true, force: true })
+}

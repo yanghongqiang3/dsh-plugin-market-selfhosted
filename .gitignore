@@ -4,3 +4,5 @@ preview/
 .research/
 # Written and deleted by start-market.bat; ignore it in case a run is interrupted.
 .dsh-version-probe.cjs
+# Built distribution tarballs. Regenerate with `node tools/pack-dist.mjs`.
+dist/

@@ -1,9 +1,16 @@
-// Check that the entry guide only references things that actually exist, and that
-// its code snippets match the real files. A guide full of plausible-looking paths is
-// worse than no guide.
+// Check that the guides only reference things that actually exist, and that their code
+// snippets match the real files. A guide full of plausible-looking paths is worse than
+// no guide.
 import { readFileSync, existsSync } from 'node:fs'
 
-const doc = readFileSync('docs/adding-a-ui-entry.md', 'utf8')
+/**
+ * Every guide, not just one. The distributing guide was added later and would otherwise
+ * have been unchecked — and it is the one whose central claim (the `package/` prefix) was
+ * itself discovered by breaking it.
+ */
+const DOCS = ['docs/adding-a-ui-entry.md', 'docs/distributing.md']
+const sources = DOCS.filter((file) => existsSync(file)).map((file) => [file, readFileSync(file, 'utf8')])
+const doc = sources.map(([, text]) => text).join('\n')
 let problems = 0
 const ok = (label, condition, extra = '') => {
   if (condition) console.log(`ok    ${label}${extra ? `  ${extra}` : ''}`)
@@ -13,7 +20,9 @@ const ok = (label, condition, extra = '') => {
   }
 }
 
-// 1. Every project-relative path the doc names must exist.
+for (const [file] of sources) ok(`文档存在且被扫描：${file}`, true)
+
+// 1. Every project-relative path the docs name must exist.
 //
 // Only BACKTICKED paths are checked: bare `lib/index.js` and `lib/types/` appear in
 // the section about reading an INSTALLED PACKAGE's layout, which is resolved through
@@ -68,6 +77,36 @@ const claims = [
   ['写明三层验证', doc.includes('### 7.3 验证')],
 ]
 for (const [label, condition] of claims) ok(label, condition)
+
+/**
+ * 4. The distribution guide's central claim, checked against the packer itself.
+ *
+ * Every entry MUST land under `package/`. A flat archive installs successfully and
+ * then silently loses its directory structure — measured both ways on this machine:
+ * entries at the root become `plugin.js` at the package root, `exports` point at files
+ * that do not exist, and both loader rows fail with `failed to import`. A guide that
+ * states this rule while the tool violates it would be worse than no guide.
+ */
+{
+  const packer = existsSync('tools/pack-dist.mjs') ? readFileSync('tools/pack-dist.mjs', 'utf8') : ''
+  ok('存在 tools/pack-dist.mjs', packer.length > 0)
+  if (packer.length > 0) {
+    ok('打包工具以 package/ 作为 staging 根', /join\(stage, 'package'\)/.test(packer))
+    ok(
+      '打包工具会拒绝 package/ 之外的条目',
+      /entries\.filter\(\(entry\) => !entry\.startsWith\('package\/'\)\)/.test(packer),
+    )
+  }
+  const guide = existsSync('docs/distributing.md') ? readFileSync('docs/distributing.md', 'utf8') : ''
+  // Match the SUBSTANCE, not a heading: an earlier version pinned the exact title text
+  // and failed the moment the wording changed, which says nothing about the guide.
+  ok(
+    '分发文档写明了 package/ 前缀是必须的',
+    guide.includes('package/') && guide.includes('必须') && guide.includes('丢失'),
+  )
+  ok('分发文档写明了与市场制品格式不同', guide.includes('与市场上卖的插件不是一个格式'))
+  ok('分发文档写明了 dsh plugin add 这一条命令', guide.includes('dsh plugin --profile'))
+}
 
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')
 process.exit(problems ? 1 : 0)
