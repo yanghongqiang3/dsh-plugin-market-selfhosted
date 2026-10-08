@@ -157,15 +157,32 @@ POST /dsh-market/auth/login                 登录 → 令牌
 POST /dsh-market/auth/logout
 GET  /dsh-market/auth/me
 POST /dsh-market/auth/password              首登必改时唯一放行的接口
-POST /dsh-market/auth/device/start|poll|approve|token
+POST /dsh-market/auth/device/start|poll|approve|token   设备授权流（目前没有消费方，见下方注）
 GET  /dsh-market/catalog                    按调用者授权过滤，每条带 canInstall/reason
 GET  /dsh-market/detail
 GET  /dsh-market/download                   校验 SHA256 后才下发，响应头带 x-artifact-sha256
 POST /dsh-market/authorize                  只做判定，不传字节
+POST /dsh-market/identity/bind              把令牌所属的市场账号与 DSH 账号绑定（一对一）
+GET  /dsh-market/identity/me                看自己的绑定
+POST /dsh-market/identity/unbind            解除自己的绑定（不需要管理员）
+GET  /dsh-market/identity/lookup            未登录；只回答某个 DSH 账号是否已被占用
+GET  /dsh-market/admin/identity             列出全部绑定（仅 admin）
+POST /dsh-market/admin/identity/unbind      按任一侧解绑（仅 admin）
 POST /dsh-market/publish                    上传归档；默认 dry run，?commit=1 写入（仅 admin）
 GET  /dsh-market/admin/users|groups|artifacts
 POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artifacts/state
 ```
+
+> **设备授权流目前没有消费方，部署前应当处理。** 四个端点都在，但 CLI 与安装页都不用它；
+> 它当初是为「插件里不直接登录、回到网页授权」设计的，后来身份改走 DSH 账号绑定（§1.6），
+> 这条路就没人走了。它现在有两个真实问题：
+>
+> - `device/start` **没有频率限制**，每次调用写一行库。服务端在可访问的地址上时，同网段
+>   的人可以刷它。过期记录只在 `prune` 时清，不是自动的。
+> - 它返回的 `verificationUrl` 用 `?activate=<code>`，而页面读的是 `user_code`，
+>   所以那个链接**打不开授权界面**。
+>
+> 因为**没有消费方**，最省事的处理是删掉它；要保留就得补限流并把参数名对齐。
 
 ### 0.7 三条不可动摇的规则
 

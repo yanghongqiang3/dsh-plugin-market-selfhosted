@@ -9,22 +9,22 @@
 ## 0. 快速版
 
 ```powershell
-# ① 在开发机打一个分发包
+# ① 在开发机打一个分发包（只做一次）
 cd E:\workspace\dsh
 node tools\pack-dist.mjs
 #   -> dist\dsh-plugin-marketplace-0.1.0.tgz
 
-# ② 把 tgz 拷给对方，在对方的机器上安装
+# ② 把 tgz 分发出去（共享盘 / 内部文件服务器），在每台客户端上安装
 dsh plugin --profile <profile> add ".\dsh-plugin-marketplace-0.1.0.tgz"
+
+# ③ 每台客户端把环境变量指向服务端，然后重启 DSH
+[Environment]::SetEnvironmentVariable('MARKET_SERVICE_URL', 'http://<服务器>:8787', 'User')
 ```
 
-装完要让**市场服务端**在网络上可达，并在对方的 DSH 环境里设一个变量：
+**① 只做一次；② 和 ③ 每台客户端都要做。**
 
-```
-MARKET_SERVICE_URL=http://<服务端地址>:8787
-```
-
-然后重启 DSH。左侧栏底部会出现「内部插件市场」。
+前提是**服务端已经部署在一台大家都访问得到的服务器上**——那是服务端部署的事，
+不是客户端分发的事。
 
 > `dsh plugin add` 会一次做完三件事：写进 profile 的 `dependencies`、
 > **加进 `dsh.profile.bundles`**、用 pnpm 装进 profile 的 `node_modules`。
@@ -66,26 +66,42 @@ npm 包的 tarball 必须把**所有条目放在一个 `package/` 目录下**。
 
 ---
 
-## 3. 服务端要能被访问到
+## 3. 客户端要知道服务端在哪
 
-每个客户端都要知道服务端在哪。三种方式：
+**部署形态**：服务端跑在一台大家都访问得到的服务器上。客户端只做一件事——把环境变量
+指向那个地址。
 
 ```powershell
-# ① 环境变量（推荐，客户端本机设置）
-MARKET_SERVICE_URL=http://10.0.0.5:8787
-
-# ② 一键脚本也认这个变量（见 start-market.bat）
-# ③ 控制台/安装页都会显示当前用的是哪个地址，配错了能立刻看出来
+# 每台客户端机器，用户级环境变量，然后重启 DSH
+[Environment]::SetEnvironmentVariable('MARKET_SERVICE_URL', 'http://<服务器>:8787', 'User')
 ```
 
-服务端要让局域网访问，它默认只监听 `127.0.0.1`：
+三个要点：
+
+1. **用户级变量**，不是只在当前 PowerShell 窗口里 `set`。从开始菜单启动 DSH 时只继承
+   用户级/系统级变量——这是最常见的"明明设了却不生效"。
+2. **设完要重启 DSH**。宿主插件在 `apply` 时读一次这个变量，之后不会重读。
+3. **怎么确认配对了**：安装页和控制台都会显示当前用的服务端地址。配错能立刻看出来，
+   不用去翻日志。
+
+> 服务端地址可以是 `http://`；如果放在反向代理后面用 `https://`，也照填。这是服务端部署的
+> 事，客户端不关心它怎么被代理——只要浏览器和客户端都能访问到那个 URL。
+
+<details>
+<summary>开发时服务端就在本机（与本部署无关，仅备查）</summary>
+
+本机跑服务端时它默认只监听 `127.0.0.1`，别的机器连不上。要让同网段能访问：
 
 ```powershell
 .\start-market.bat --host 0.0.0.0
 ```
 
-> `--host 0.0.0.0` 同时会设置 `MARKET_CALLBACK_HOST`，否则服务端拼出来的 URL
-> 仍然是 `127.0.0.1`，别的机器点不动。
+实测：绑到 `0.0.0.0` 后可从内网地址访问 health 与控制台。`--host` 同时会设
+`MARKET_CALLBACK_HOST`，否则服务端拼出来的 URL 仍是 `127.0.0.1`，别的机器点不动。
+
+**这只适用于"服务端恰好在你机器上"的开发场景。** 真实部署里服务端在服务器上，
+客户端不需要任何 `--host` 参数。
+</details>
 
 ---
 
@@ -97,7 +113,21 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
    - 看自己的插件目录（默认拒绝：没有规则就什么都看不到）；
    - 安装 / 卸载；
    - **绑定 / 解绑自己的 DSH 账号**（一对一，不需要管理员）。
-4. 权限、账号、发布在**服务端控制台** `http://<服务端>:8787/console`。
+4. 权限、账号、发布在**服务端控制台** `http://<服务器>:8787/console`。
+
+### 装完怎么确认成功
+
+看 DSH 的 stderr：
+
+```
+✅ 什么都不打印
+❌ dsh: warning: N entry did not activate
+   marketplace (dsh-plugin-marketplace/plugin): failed to import
+```
+
+看到 `failed to import`，先查这一件事：`node_modules\dsh-plugin-marketplace\lib\plugin.js`
+**是否真的在 `lib\` 下**。如果文件是扁平的（`plugin.js` 直接在包根），就是 §1 那个
+`package/` 前缀问题——归档打错了。
 
 ---
 
@@ -144,10 +174,17 @@ market 的制品格式是扁平的，因为 `inspectArchive` 是**在归档根**
 
 ## 8. 检查清单
 
+**开发机（一次）**
+
 - [ ] `node tools/pack-dist.mjs` 打出的归档，条目**都在 `package/` 下**
-- [ ] 对方机器上 `dsh plugin --profile <p> add <tgz>` 没有报错
+
+**每台客户端**
+
+- [ ] `dsh plugin --profile <p> add <tgz>` 没有报错
 - [ ] profile 的 `dsh.profile.bundles` 里有 `dsh-plugin-marketplace`
 - [ ] `node_modules\dsh-plugin-marketplace\lib\plugin.js` **确实在 `lib\` 下**
-- [ ] 设好 `MARKET_SERVICE_URL` 并重启 DSH
+- [ ] `MARKET_SERVICE_URL` 是**用户级**变量，指向服务器地址
+- [ ] **重启过 DSH**（装完包要重启，设完变量也要重启）
 - [ ] stderr **没有** `failed to import`
 - [ ] 左侧栏底部看得到入口，点得开
+- [ ] 安装页上显示的服务端地址是对的
