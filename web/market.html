@@ -195,8 +195,30 @@ async function loadInstalled() {
   installedMap.clear()
   try {
     const result = await local('/dsh-market/installed')
-    for (const item of result.body?.installed ?? []) installedMap.set(item.name, item)
+    // The host plugin answers `{ entries: [...] }`, NOT `{ installed: [...] }`.
+    // Reading the wrong key left this map permanently empty, so every plugin showed
+    // as 未安装 even right after installing it here. Assert the shape rather than
+    // silently defaulting to nothing.
+    const list = result.body?.entries
+    if (!Array.isArray(list)) {
+      status(`读取本机已装列表失败：${result.body?.code ?? result.body?.detail ?? '响应缺少 entries'}`, true)
+      return
+    }
+    for (const item of list) installedMap.set(item.name, item)
   } catch { /* the catalog still renders; install buttons just cannot tell state */ }
+}
+
+/**
+ * Render the catalog only once the installed list is known.
+ *
+ * These used to run in the other order: the grid was drawn while `installedMap` was
+ * still empty, so every card offered 安装 even for plugins already on this machine.
+ * The second render hid it in the common path, which is exactly why the order is
+ * asserted by the preflight rather than left implicit.
+ */
+async function refreshCatalog() {
+  await loadInstalled()
+  await loadCatalog()
 }
 
 async function loadCatalog() {
@@ -272,9 +294,10 @@ async function doUninstall(entry, button) {
 S.onAuthenticated(async () => {
   setWho(state.me?.displayName ?? state.me?.username ?? '')
   $('login-service').textContent = `服务端：${state.serviceUrl}`
-  await loadCatalog()
-  await loadInstalled()
-  renderGrid()
+  // Installed state first, then the catalog: the grid decides each card's buttons
+  // from `installedMap`, so drawing it before the list arrives offers 安装 for
+  // plugins that are already here.
+  await refreshCatalog()
   show('market')
 })
 
@@ -282,7 +305,7 @@ $('login-submit').addEventListener('click', S.doLogin)
 $('login-pass').addEventListener('keydown', (event) => { if (event.key === 'Enter') S.doLogin() })
 $('pw-submit').addEventListener('click', S.doChangePassword)
 $('logout').addEventListener('click', S.doLogout)
-$('refresh').addEventListener('click', () => { loadCatalog().then(() => loadInstalled().then(renderGrid)) })
+$('refresh').addEventListener('click', () => { status(''); refreshCatalog() })
 $('query').addEventListener('input', () => { if (catalog) renderGrid() })
 $('noService-retry').addEventListener('click', () => location.reload())
 

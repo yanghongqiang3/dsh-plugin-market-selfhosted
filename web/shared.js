@@ -154,7 +154,7 @@
     token.set(result.body.token)
     global.localStorage.setItem(SERVICE_KEY, state.serviceUrl ?? '')
     $('login-pass').value = ''
-    state.me = result.body.user ?? null
+    setMe(result.body.user)
     if (result.body.mustChangePassword) {
       setWho(result.body.user?.displayName ?? username)
       show('password')
@@ -211,15 +211,28 @@
       .catch(() => { /* request() already switched views */ })
   }
 
+  /**
+   * Record the signed-in user and derive the admin flag.
+   *
+   * The service reports `role: 'admin' | 'member'` — there is no boolean `isAdmin`
+   * field. Reading one anyway made every administrator look like a member, which
+   * sent a freshly signed-in admin to 「需要管理员权限」. Derived here, once, so no
+   * caller can get it wrong again.
+   */
+  function setMe(user) {
+    if (user !== undefined && user !== null) state.me = user
+    state.isAdmin = state.me?.role === 'admin'
+    setWho(state.me?.displayName ?? state.me?.username ?? '')
+    return state.me
+  }
+
   async function startActivate() {
     const pending = global.__marketPendingActivation
     if (!pending) return
     $('act-code').value = pending
     try {
       const result = await service('/dsh-market/auth/me')
-      state.me = result.body?.user ?? state.me
-      state.isAdmin = Boolean(result.body?.user?.isAdmin || result.body?.admin)
-      setWho(state.me?.displayName ?? state.me?.username ?? '')
+      setMe(result.body?.user)
       if (result.ok) show('activate')
     } catch { /* not signed in: login first, activation stays reachable from the link */ }
   }
@@ -336,9 +349,7 @@
     try {
       const me = await service('/dsh-market/auth/me')
       if (!me.ok) { show('login'); return state }
-      state.me = me.body?.user ?? null
-      state.isAdmin = Boolean(state.me?.isAdmin)
-      setWho(state.me?.displayName ?? state.me?.username ?? '')
+      setMe(me.body?.user)
       await enter()
     } catch {
       /* request() already switched to login or password */

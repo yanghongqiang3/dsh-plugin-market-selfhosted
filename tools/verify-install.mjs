@@ -241,6 +241,36 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     } else {
       fail('DSH install page must offer both install and uninstall')
     }
+
+    /**
+     * The installed list is keyed `entries`, not `installed`.
+     *
+     * `GET /dsh-market/installed` answers `{ profileDir, patchFile, entries }`. The
+     * page read `body.installed`, so the map stayed empty and EVERY plugin showed as
+     * 未安装 — including ones installed from this very page a moment earlier. The
+     * preflight passed throughout, because "the page renders a card" says nothing
+     * about which key it reads.
+     */
+    if (/body\?\.installed\b/.test(market)) {
+      fail('DSH install page reads body.installed — the host plugin answers with `entries`')
+    } else {
+      ok('DSH install page reads the installed list from the right key')
+    }
+    if (/body\?\.entries\b/.test(market)) {
+      ok('DSH install page expects `entries` from /dsh-market/installed')
+    } else {
+      fail('DSH install page does not read `entries` from /dsh-market/installed')
+    }
+
+    // Installed state must be known BEFORE the grid is drawn, or every card is
+    // rendered as not-installed and only a second pass hides it.
+    const installedIdx = market.indexOf('await loadInstalled()')
+    const catalogIdx = market.indexOf('await loadCatalog()')
+    if (installedIdx >= 0 && catalogIdx >= 0 && installedIdx < catalogIdx) {
+      ok('installed state is loaded before the catalog is rendered')
+    } else {
+      fail('the catalog is rendered before the installed list is known — cards would offer 安装 for installed plugins')
+    }
   }
 
   if (fs.existsSync(consolePath)) {
@@ -277,6 +307,36 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
       ok('console declares serveSelf — it uses its own origin as the service URL')
     } else {
       fail('console does not declare serveSelf: true — it would probe the DSH host plugin and report itself as not ready')
+    }
+
+    /**
+     * The service reports `role`, never a boolean `isAdmin`.
+     *
+     * The console read `state.me.isAdmin`, which is `undefined` for everyone, so the
+     * real administrator was sent to 「需要管理员权限」. The same confusion appeared in
+     * the request payloads, where the service silently coerced the wrong field:
+     * `{ isAdmin }` on create/role, and `{ disabled }` on status where it expects
+     * `{ status: 'active' | 'disabled' }` — so 「停用」 appeared to do nothing.
+     *
+     * Only a FIELD ACCESS counts. A local `const isAdmin = user.role === 'admin'` is
+     * correct code, and flagging it was this check's first version's mistake.
+     */
+    const readsAdminField = /\.isAdmin\b/.test(consolePage) || /isAdmin\s*:/.test(consolePage)
+    if (readsAdminField) {
+      fail('console reads or sends a boolean `isAdmin` field — the service uses `role: "admin" | "member"`')
+    } else {
+      ok('console uses the `role` field the service actually reports')
+    }
+    const rolePayload = /role:\s*isAdmin\s*\?\s*'member'\s*:\s*'admin'/.test(consolePage)
+    if (rolePayload) {
+      ok('console sends `{ role }` when changing a role')
+    } else {
+      fail('console does not send `{ role }` to /dsh-market/admin/role')
+    }
+    if (/status:\s*disabled\s*\?\s*'active'\s*:\s*'disabled'/.test(consolePage)) {
+      ok('console sends `{ status: "active" | "disabled" }` when toggling an account')
+    } else {
+      fail('console does not send `{ status }` to /dsh-market/admin/status')
     }
   }
 

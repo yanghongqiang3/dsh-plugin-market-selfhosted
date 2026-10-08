@@ -251,12 +251,17 @@ function renderUsers() {
     table.appendChild(empty)
   }
   for (const user of users) {
-    const action = miniButton(user.disabled ? '启用' : '停用', async () => {
+    const isAdmin = user.role === 'admin'
+    const disabled = user.status === 'disabled'
+    // `POST /admin/status` takes `{ status: 'active' | 'disabled' }`; sending a
+    // boolean `disabled` was silently coerced to 'active' by the service, so
+    // 「停用」 appeared to do nothing.
+    const action = miniButton(disabled ? '启用' : '停用', async () => {
       const result = await service('/dsh-market/admin/status', {
-        method: 'POST', body: { username: user.username, disabled: !user.disabled },
+        method: 'POST', body: { username: user.username, status: disabled ? 'active' : 'disabled' },
       })
       if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`${user.username} 已${user.disabled ? '启用' : '停用'}。`)
+      status(`${user.username} 已${disabled ? '启用' : '停用'}。`)
       await loadAdmin()
     })
     const reset = miniButton('重置密码', async () => {
@@ -269,12 +274,13 @@ function renderUsers() {
       status(`${user.username} 的密码已重置，下次登录会被要求改密。`)
       await loadAdmin()
     })
-    const role = miniButton(user.isAdmin ? '取消管理员' : '设为管理员', async () => {
+    // `POST /admin/role` takes `{ role }`, not `{ isAdmin }`.
+    const role = miniButton(isAdmin ? '取消管理员' : '设为管理员', async () => {
       const result = await service('/dsh-market/admin/role', {
-        method: 'POST', body: { username: user.username, isAdmin: !user.isAdmin },
+        method: 'POST', body: { username: user.username, role: isAdmin ? 'member' : 'admin' },
       })
       if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`${user.username} 管理员角色已${user.isAdmin ? '取消' : '授予'}。`)
+      status(`${user.username} 的角色已改为 ${result.body?.role}。`)
       await loadAdmin()
     })
     const memberships = groups.map((group) => chip(
@@ -294,8 +300,8 @@ function renderUsers() {
     const row = trow([
       [user.username],
       [user.displayName ?? '—'],
-      [user.isAdmin ? '管理员' : '普通', user.isAdmin ? 'ok' : ''],
-      [user.disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), user.disabled ? 'bad' : ''],
+      [isAdmin ? '管理员' : '普通', isAdmin ? 'ok' : ''],
+      [disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), disabled ? 'bad' : ''],
     ])
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
@@ -526,8 +532,11 @@ function renderArtifacts() {
 S.onAuthenticated(async () => {
   setWho(state.me?.displayName ?? state.me?.username ?? '')
   $('login-service').textContent = `服务端：${state.serviceUrl}`
-  if (!state.isAdmin) {
-    $('denied-who').textContent = `当前账号：${state.me?.username ?? '(未知)'}（非管理员）`
+  // The service reports `role: 'admin' | 'member'`. It does NOT report a boolean
+  // `isAdmin` — reading one made every administrator look like a member, so a
+  // freshly signed-in admin landed on 「需要管理员权限」.
+  if (state.me?.role !== 'admin') {
+    $('denied-who').textContent = `当前账号：${state.me?.username ?? '(未知)'}（角色：${state.me?.role ?? '未知'}）`
     show('denied')
     return
   }
@@ -571,7 +580,8 @@ $('nu-submit').addEventListener('click', async () => {
       username,
       password,
       displayName: $('nu-display').value.trim() || undefined,
-      isAdmin: $('nu-admin').checked,
+      // `POST /admin/users` takes `{ role }`, not `{ isAdmin }`.
+      role: $('nu-admin').checked ? 'admin' : 'member',
       groups: selected,
     },
   })
