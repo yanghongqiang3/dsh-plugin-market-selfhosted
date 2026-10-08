@@ -14,35 +14,38 @@
 #     Rows exist because a patch inserts them — which is what the insert below
 #     does. Copying files into node_modules mounts nothing on its own.
 #
-# ONE row, deliberately. A browser half (`dsh.client`) needs a SECOND row whose
-# `name` is the BARE package name, because `dsh-client-modules` resolves a row's
-# package.json through `exactPackageSpecifier`, which returns undefined for any
-# specifier containing "/" — after which `locatePkgJson` drops the row SILENTLY.
+# There are TWO rows, and the difference in their `name` is load-bearing:
 #
-# That route is written but DISABLED. lib/client.js is a complete client module
-# (plain script, react from the platform seed, registrations for
-# `sidebar.panellist` and `sidebar.footer.action`). It was enabled and tested:
+#   dsh-plugin-marketplace/plugin   Host half. A host row may name a subpath.
+#   dsh-plugin-marketplace          Browser half. This MUST be the bare package
+#                                   name: `dsh-client-modules` resolves a row's
+#                                   package.json via `exactPackageSpecifier`,
+#                                   which returns undefined for any specifier
+#                                   containing "/", after which `locatePkgJson`
+#                                   drops the row SILENTLY — no error, just no
+#                                   client module.
 #
-#   - both rows' modules imported successfully, proven with an import probe
-#     (`[bundle] bare-name entry imported`, `[probe] plugin.js imported`, and
-#     `apply` ran, registering 6/6 routes);
-#   - yet the browser's boot graph (`__DSH_BOOT__.entries`) never received
-#     `dsh-plugin-marketplace`, and the host audit reported
-#     `marketplace-client (dsh-plugin-marketplace): failed to import`;
-#   - a structurally identical control package (`dsh-client-smoke`, same
-#     directory, same manifest shape, no `dependencies` entry) activated fine.
+# The browser half (`lib/client.js`) is a plain script, not a build output: it
+# registers itself through `window.__ModuleLoader__.load({ id, factory })` with an
+# id equal to the package name. See that file's header for the rules that decide
+# whether it activates, and `dsh.client.inject` in package.json for the client-side
+# ordering.
 #
-# Until that difference is explained, enabling the row would put a
-# `warning: 1 entry did not activate` on every launch. The in-app entry is
-# injected through `webserver/index-inject` instead (README §4.1).
-#
-# To re-enable: restore `dsh.client` in package.json, restore the `./client`
-# export, and add `- id: marketplace-client` / `name: dsh-plugin-marketplace`.
+# On the empty host half in lib/bundle.js: keeping a bundle's own entry free of
+# behaviour is a convention worth following, but it is NOT what the activation
+# audit enforces. That audit only checks whether each row's fiber reached
+# `active`, and a row whose `apply` ran is active whatever it did.
 
 - insert:
     - id: marketplace
       name: dsh-plugin-marketplace/plugin
+    - id: marketplace-client
+      name: dsh-plugin-marketplace
 
-# Verify after a DSH restart: ~/.dsh/plugin-marketplace-diag.log should record
-#   [entry] registered webserver/index-inject rows (desktop + web shell)
-#   [register] registered 6/6 routes
+# Verify after a DSH restart:
+#   ~/.dsh/plugin-marketplace-diag.log records
+#     [entry] registered webserver/index-inject rows (desktop + web shell)
+#     [register] registered 7/7 routes
+#   and the startup output must NOT contain
+#     marketplace-client (dsh-plugin-marketplace): failed to import
+#   `plugin_manager` list_bundles should show this bundle with TWO rows.

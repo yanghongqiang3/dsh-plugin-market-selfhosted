@@ -11,10 +11,13 @@ DSH 内部插件市场，由**两部分**组成：
 > 那样管理员建的号别人登不上、改的规则只对自己生效、审计散在各人机器上——
 > "管理员手动添加用户"这个需求根本无法成立。所以权威在服务端，本机只负责落盘。
 
-**应用内入口**：DSH 左侧栏里，会话列表下方有一行「内部插件市场」（在「工作区」区域内）。
+**应用内入口（原生）**：DSH 左侧栏底部的「内部插件市场」按钮，注册在官方插槽
+`sidebar.footer.action`（设置按钮旁边），同时在 `sidebar.panellist`（「插件」那一组）有一个图标。
 点击**在系统浏览器中打开** `/market`，DSH 主界面不受影响。
-它是通过 `webserver/index-inject` 注入并**运行时测量定位**的（机理见 §4.1），
 也可以直接在浏览器访问 `http://127.0.0.1:<DSH 端口>/market`。
+
+它是**真正的客户端插件**（`lib/client.js` + `package.json` 的 `dsh.client`），不是注入的 DOM，
+所以侧边栏折叠成 56px 时会自动变成图标、跟随主题 token、跟随 locale——这些注入方案都做不到。
 
 ---
 
@@ -160,12 +163,11 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 
 设为 DSH 的环境变量后重启 DSH。可选：`MARKET_SERVICE_TIMEOUT_MS`（默认 30000）、`DSH_PROFILE_DIR`。
 
-然后重启 DSH。**左侧栏会话列表下方会出现「内部插件市场」一行**，点击在系统浏览器中打开；
+然后重启 DSH。**左侧栏底部、设置按钮旁边会出现「内部插件市场」**，点击在系统浏览器中打开；
 也可以直接访问 `http://127.0.0.1:<DSH 端口>/market`。
 
-> 定位是**运行时测量**的，不是写死的偏移：注入的脚本找到「工作区」标题，再读它后面
-> 会话列表的底边，把入口放在列表下方。写死偏移会踩到别的东西——侧边栏在「插件」行和
-> 「工作区」标题之间**只有约 18px**，放不下一行，我最初就撞在这上面。
+> 侧边栏折叠成 56px 的窄条时，入口会自动变成图标（`SidebarFooterActionOwnerProps` 的
+> `wide: false`）。这是插槽给的，不需要自己判断宽度。
 
 ### 1.2 它做什么、不做什么
 
@@ -175,7 +177,7 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 | 本地再校验一遍 sha256 | 不保存账号、组、规则 |
 | 解包并写入本机 profile | 不保存插件目录 |
 | 写 `dsh.profile.bundles` 或 profile patch 层 | 不执行安装脚本 |
-| 往壳里注入一个入口（`webserver/index-inject`） | 不注册任何客户端插槽 |
+| 注册客户端插槽入口（`sidebar.footer.action` / `sidebar.panellist`） | 不注入 DOM、不测量壳的布局 |
 
 本机接口：
 
@@ -198,11 +200,12 @@ DSH 的窗口是无边框的（`titleBarStyle: "hidden"`），Electron 把
 - **可拖拽区（`-webkit-app-region: drag`）必须避开右上角那 ~180px**。
   我第一版让拖拽条横跨整个顶部，结果**它吞掉了关闭按钮的点击**——
   点关闭变成了收起整个 DSH 窗口。现在拖拽条止于控件区左侧，控件角显式设为 `no-drag`。
-- 这两条只在桌面壳里生效（检测 `globalThis.dshDesktopBoot`）；浏览器里打开时
-  `--titlebar: 0`，不会多出空白。
+这两条由 `web/market.html` 自己实现（`body.chrome` 类 + `--titlebar` / `--window-controls`
+变量），只在桌面壳里生效（检测 `globalThis.dshDesktopBoot`）；浏览器里打开时
+`--titlebar: 0`，不会多出空白。
 
-`tools/shoot-titlebar.mjs` 守这条：它把页面按桌面窗口尺寸渲染，画上窗口按钮，
-然后断言（a）拖拽条没有覆盖控件角、（b）控件左侧仍可拖拽、（c）标题与右上角按钮都在控件条下方。
+验证方式：在桌面壳里打开 `/market`，用 CDP 量 `elementFromPoint` —— 拖拽条不得占用控件角，
+控件左侧仍须可拖拽，标题与右上角按钮都必须在控件条下方。
 
 ### 1.3 安装时的四道关
 
@@ -247,19 +250,32 @@ DSH 的窗口是无边框的（`titleBarStyle: "hidden"`），Electron 把
 > 关于 `lib/bundle.js` 为什么是空的：那只是**沿用官方惯例**。我原先在注释里断言
 > "组合包自己的入口做了事会被审计为失败行"——**这个说法不成立**。激活审计只问每条行的
 > fiber 是否到了 `active`，而 `apply` 正常返回的行就是 active，不管它做了什么。
-> 本包自己的诊断日志（`registered 5/5 routes`）就来自一条"做了事"的行。
+> 本包自己的诊断日志（`registered 6/6 routes`）就来自一条"做了事"的行。
+>
+> **但"行 active"不等于"客户端模块可用"。** 这是两件事：行 active 只说明宿主模块被接受了；
+> 客户端半边还要 `dsh-client-modules` 组装出 bundle 并注册进插槽。踩过的坑见 §4.1.1。
 
-### 1.5 联调测试（真实浏览器 + 真实服务端 + 真实 profile）
+### 1.5 测试
 
 ```powershell
 $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
-$edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
-& $edge --headless=new --remote-debugging-port=9350 --user-data-dir="$env:TEMP\edge-integ" about:blank
-& $node tools\test-integration.mjs 9350
+& $node tools\test-host.mjs                                    # 宿主入口与路由契约
+& $node tools\test-server.mjs                                  # 服务端
+& $node tools\test-publish.mjs                                 # 发布/上传
+& $node tools\verify-install.mjs "$env:USERPROFILE\.dsh\profiles\desktop"   # 安装与客户端契约预检
 ```
 
-断言的是**最终效果**：点完安装后，那个临时 profile 的 `package.json` 里真的有依赖、
-`cordis.patch.yml` 里真的有托管行、磁盘上真的有插件文件；点卸载后全部干净退回。
+`verify-install.mjs` 里那组"客户端契约"断言值得单独说：它们守的是**让客户端半边能加载的
+每一条硬性要求**（`dsh.client` 声明、`exports["./client"]`、factory id 等于包名、bare-name 行、
+`lib/bundle.js` 导出 `apply`）。每一条都是被违反过、而且症状极不明显的那种。
+
+端到端验证（需要浏览器控制、且需要 DSH 实例在跑）：
+
+```powershell
+& $node tools\verify-native-entry.mjs 'http://127.0.0.1:3080/' 9420 "<token>"
+```
+
+它断言原生按钮**真的渲染出来了**（而不只是被组装了），并报告页面异常。
 
 ---
 
@@ -294,9 +310,9 @@ tools/                        测试与本地夹具
 
 ## 4. 排错
 
-### 4.1 壳页面注入：两个通道，只有一个在 Electron 下有效
+### 4.1 客户端插件是怎么进到页面里的
 
-**这是本项目最容易搞错的地方**，我在这里返工过两次，所以写清楚。
+**这是本项目最容易搞错的地方**，我在这里返工过多次，所以写清楚。
 
 桌面壳**不通过 HTTP 提供它的 index**。Electron 的 `protocol.handle('dsh-app', …)` 是这样分派的：
 
@@ -316,7 +332,17 @@ if (url.hostname === "app") {
 |---|---|---|
 | `webServer.register`（路由） | ✅ | ✅（非 index 路径会转发给宿主） |
 | `webServer.tapIndex`（`renderIndex` → `applyIndexTaps`） | ✅ | ❌ 从磁盘读，根本不经过 `renderIndex` |
-| **`webserver/index-inject` 行** | ✅ | ✅ **唯一的注入通道** |
+| **`webserver/index-inject` 行** | ✅ | ✅ **唯一有效的通道** |
+
+**我的插件不再自己往这个通道里塞东西**（早先版本塞了一个 `document.body` 入口，那套已废弃）。
+现在用这个通道的是 `@deepseek-ai/dsh-client-modules`：
+
+```js
+ctx.on("webserver/index-inject", (table) => { table.push(...bootInjections(this.composed)); });
+```
+
+它把客户端 bundle 的 URL 和 `inject`/`immediately` 一起送进页面。所以**客户端插件能不能用，
+取决于这个通道通不通**——这也是为什么本地没有任何 HTML 可改时它依然能工作。
 
 Electron 下注入行的路径是 **IPC**，不是 HTML 改写：
 
@@ -333,13 +359,40 @@ renderer:         for (const row of injections) switch (row.kind) {
 
 **两个后果**：
 
-1. 行必须注册**早于** `collectIndexInjections()`（宿主 report ready 时只收集一次）。所以插件要在
-   `webServer` 一出现就注册监听，不能等到别的事情做完。
+1. 行必须注册**早于** `collectIndexInjections()`（宿主 report ready 时只收集一次）。
 2. **未知的 `kind` 会让整个 web boot 抛异常**。合法 kind 只有：
    `global` / `script` / `script-src` / `script-preload` / `style` / `html`。
    两种壳接受的 kind 完全一样。
 
-`tools/test-shell-entry.mjs` 专门守这条：它断言行既存在、schema 正确，又都在合法 kind 列表里。
+### 4.1.1 客户端半边为什么曾经一直不激活
+
+症状只有一行、而且极具误导性：
+
+```
+dsh: warning: 1 entry did not activate
+marketplace-client (dsh-plugin-marketplace): failed to import
+```
+
+**`failed to import` 只表示 `entry.fiber === undefined`**（见 dsh-app-boot 的 `inactiveEntries`），
+真实原因被 loader 交给了它自己的 logger，外部看不到。用探针拦截 `ctx.loader.ctx.logger.error`
+之后才拿到：
+
+```
+invalid plugin, expect function or object with an "apply" method, received object
+```
+
+原因是 `lib/bundle.js` 写成了 `export {}`——**我当时的注释还声称这是"约定"**。
+而 loader 会校验每条行的模块，空命名空间直接判为非法插件 → 该行没有 fiber → 客户端模块
+从未被组装 → `/plugins/??<pkg>/client.js` 一直 404 → 插槽从未注册。
+
+**现已改为导出 `apply`。** 两条行都应 `fiber=present`，且首页 boot wire 里能看到：
+
+```json
+{"id":"dsh-plugin-marketplace","url":"plugins/??dsh-plugin-marketplace/client.js&rev=…",
+ "inject":["@deepseek-ai/dsh-client-ui-sidebar"],"immediately":true}
+```
+
+`tools/test-host.mjs` 和 `tools/verify-install.mjs` 都守这条契约。
 
 ### 4.2 接口前缀为什么不能是 `/api`
 

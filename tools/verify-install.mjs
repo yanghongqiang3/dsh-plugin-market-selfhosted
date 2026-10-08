@@ -70,27 +70,35 @@ pkg.main ? ok(`main = ${pkg.main}`) : fail('main missing')
 bundleEntry ? ok(`exports["."] = ${bundleEntry} (bundle entry)`) : fail('exports["."] missing')
 pluginEntry ? ok(`exports["./plugin"] = ${pluginEntry} (host row)`) : fail('exports["./plugin"] missing')
 
-if (pkg.dsh?.client) {
-  fail('dsh.client must not be declared: the browser half is a served page, not a client plugin')
-} else {
-  ok('no dsh.client declaration (page is served by the host row)')
-}
-if (pkg.exports?.['./client']) {
-  fail('exports["./client"] must not exist in this architecture')
-} else {
-  ok('no client export')
-}
+// `dsh.client` and `exports["./client"]` are REQUIRED, not forbidden.
+//
+// These two checks previously asserted the opposite, describing the browser half as
+// "a served page, not a client plugin". That was the design that failed: a page
+// injected into document.body cannot respect the collapsed sidebar, cannot use theme
+// tokens, and is explicitly discouraged ("choose a slot that already allocates
+// space"; "do not write DOM outside your component"). The native entry is a client
+// plugin, and its presence is asserted in detail further down.
+pkg.dsh?.client
+  ? ok('dsh.client declared (the native entry needs a client half)')
+  : fail('dsh.client missing — the native sidebar entry cannot load')
+pkg.exports?.['./client']
+  ? ok('exports["./client"] present')
+  : fail('exports["./client"] missing — dsh-client-modules would reject the package')
 
 const patchDecl = pkg.dsh?.bundle?.patch
 if (!patchDecl) fail('dsh.bundle.patch missing — the plugin manager refuses the package as a bundle')
 else ok(`dsh.bundle.patch declared (${[patchDecl].flat().join(', ')})`)
 
+// The bundle root must be a VALID plugin, i.e. export `apply`. It used to be required
+// to be `export {}`; that requirement was wrong and it silently broke the client half,
+// because the loader rejects an empty namespace and reports it only as
+// `failed to import`. The behavioural half still lives in the `./plugin` row.
 if (bundleEntry) {
   const text = fs.readFileSync(path.join(dir, bundleEntry), 'utf8')
-  const stripped = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').trim()
-  stripped === 'export {}'
-    ? ok('bundle entry is empty (export {}) — a behavioural root fails activation')
-    : fail(`bundle entry carries behaviour (${JSON.stringify(stripped.slice(0, 60))})`)
+  const exportedApply = /export\s+function\s+apply/.test(text)
+  exportedApply
+    ? ok('bundle entry exports apply — the loader rejects an empty namespace')
+    : fail('bundle entry must export apply; an empty module gets no fiber and fails as "failed to import"')
 }
 
 if (patchEntry) {
@@ -100,8 +108,11 @@ if (patchEntry) {
     : fail(`patch layer must insert "${PKG}/plugin"`)
   const isInsertList = /^-\s*insert:/m.test(patchText)
   isInsertList ? ok('patch layer uses the insert list form') : fail('patch layer must be an insert list')
+  // TWO rows: the host subpath plus the bare package name for the browser half.
   const rowCount = (patchText.match(/^\s*-\s*id:/gm) ?? []).length
-  rowCount === 1 ? ok('patch layer inserts exactly one row') : fail(`patch layer inserts ${rowCount} rows, expected 1`)
+  rowCount === 2
+    ? ok('patch layer inserts exactly two rows (host subpath + bare client name)')
+    : fail(`patch layer inserts ${rowCount} rows, expected 2`)
 }
 
 for (const [label, rel] of [['bundle', bundleEntry], ['plugin', pluginEntry]]) {
@@ -148,36 +159,90 @@ if (fs.existsSync(pagePath)) {
 // The client must not carry its own account/policy authority any more.
 const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
 
-// The positioning script used to be a template literal inside lib/plugin.js, where
-// `node --check` cannot see it and a syntax error fails ONLY in the browser: the
-// entry stayed `display:none` on every launch while every host-side check was
-// green. It now lives in its own file, and this asserts the GENERATED script
-// actually parses — a string heuristic (looking for stray "*" lines) was tried
-// first and produced false positives on ordinary JSDoc.
+// The in-app entry is a CLIENT-HALF registration, so the thing worth asserting is
+// the contract that makes a client half load at all. Each rule below was learned by
+// breaking it:
+//
+//   - `dsh.client` must be declared, or `dsh-client-modules` ignores the package;
+//   - `exports["./client"]` must exist, or it throws
+//     `declares dsh.client but exports no "./client" bundle`;
+//   - the artifact must be a plain script registering a factory whose id EQUALS the
+//     package name, loaded via `window.__ModuleLoader__.load`;
+//   - the bare-package-name row must exist in the patch, because a row naming a
+//     subpath is dropped silently by `exactPackageSpecifier`;
+//   - `lib/bundle.js` must actually export `apply`. An empty namespace is rejected
+//     with `invalid plugin, expect function or object with an "apply" method`, the
+//     row gets no fiber, and the ONLY symptom is the audit's `failed to import`.
 {
-  const scriptPath = path.join(dir, 'lib', 'entry-position.js')
-  if (!fs.existsSync(scriptPath)) {
-    fail('lib/entry-position.js missing — the injected placement script has no home')
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+  const pkgName = manifest.name
+
+  const clientDecl = manifest.dsh?.client
+  if (clientDecl === undefined) {
+    fail('package.json has no dsh.client — the browser half is never loaded')
   } else {
-    ok('injected placement script has its own file (lib/entry-position.js)')
-    pluginSource.includes("from './entry-position.js'")
-      ? ok('lib/plugin.js imports the placement script')
-      : fail('lib/plugin.js does not import lib/entry-position.js')
-    try {
-      const { entryPositionScript } = await import(pathToFileURL(scriptPath).href)
-      const generated = entryPositionScript('dsh-marketplace-entry')
-      try {
-        // Parsing only: this must never run here.
-        new Function(generated)
-        ok(`generated placement script parses (${generated.length} chars)`)
-      } catch (error) {
-        fail(`generated placement script has a syntax error — the entry would never appear: ${error.message}`)
+    clientDecl.platform === 'web'
+      ? ok('dsh.client.platform is "web"')
+      : fail(`dsh.client.platform is ${JSON.stringify(clientDecl.platform)}, expected "web"`)
+    Array.isArray(clientDecl.inject)
+      ? ok('dsh.client.inject declared', clientDecl.inject.join(', '))
+      : fail('dsh.client.inject missing — client-side activation order is undefined')
+  }
+
+  const clientRel = manifest.exports?.['./client']
+  const clientPath = typeof clientRel === 'string'
+    ? clientRel
+    : (clientRel !== null && typeof clientRel === 'object' ? clientRel.default : undefined)
+  if (typeof clientPath !== 'string') {
+    fail('package.json exports no "./client" bundle')
+  } else {
+    const clientFile = path.join(dir, clientPath)
+    if (!fs.existsSync(clientFile)) {
+      fail(`exports["./client"] points at a missing file: ${clientPath}`)
+    } else {
+      const source = fs.readFileSync(clientFile, 'utf8')
+      ok(`client bundle present (${clientPath})`)
+      source.includes('window.__ModuleLoader__.load')
+        ? ok('client bundle uses the documented loader facade')
+        : fail('client bundle does not call window.__ModuleLoader__.load')
+      source.includes(`id: '${pkgName}'`) || source.includes(`id: "${pkgName}"`)
+        ? ok('client factory id equals the package name')
+        : fail(`client factory id must equal "${pkgName}" exactly, or the row fails`)
+      // Plain script, not a module: no import/export statements at top level.
+      // Written as an if, not a bare regex as a ternary condition — a leading `/`
+      // there parses as division.
+      const isModule = /^\s*(import|export)\s/m.test(source)
+      if (isModule) {
+        fail('client bundle contains import/export — it must be a classic script')
+      } else {
+        ok('client bundle is a classic script (no import/export)')
       }
-      generated.includes('dsh-marketplace-entry')
-        ? ok('generated script targets the entry element id')
-        : fail('generated script does not mention the entry element id')
-    } catch (error) {
-      fail(`could not import lib/entry-position.js: ${String(error?.message ?? error)}`)
+      // Only theme tokens for colour, per references/practices.md.
+      const literalColour = /(?:color|background|borderColor)\s*:\s*['"](?:#|rgb|hsl)/i.test(source)
+      if (literalColour) {
+        fail('client bundle uses a literal colour in a style — use --dsw-alias-* tokens')
+      } else {
+        ok('client bundle styles use theme tokens only')
+      }
+
+      // The bare-name row must exist, and the bundle root must be a real plugin.
+      const patch = fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8')
+      const bareRow = new RegExp(
+        `^\\s+name:\\s*['"]?${pkgName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]?\\s*$`,
+        'm',
+      ).test(patch)
+      if (bareRow) {
+        ok('cordis.patch.yml has the bare-package-name client row')
+      } else {
+        fail('cordis.patch.yml has no bare-package-name row — the client half never loads')
+      }
+
+      const bundleSource = fs.readFileSync(path.join(dir, 'lib', 'bundle.js'), 'utf8')
+      if (/export\s+function\s+apply/.test(bundleSource)) {
+        ok('lib/bundle.js exports apply (loader rejects an empty namespace)')
+      } else {
+        fail('lib/bundle.js must export apply — an empty module fails the row with "failed to import"')
+      }
     }
   }
 }
