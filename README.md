@@ -267,11 +267,16 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 & $node tools\test-server.mjs                                  # 服务端
 & $node tools\test-publish.mjs                                 # 发布/上传
 & $node tools\verify-install.mjs "$env:USERPROFILE\.dsh\profiles\desktop"   # 安装与客户端契约预检
+& $node tools\check-docs.mjs                                   # 文档里的路径与代码片段是否仍然属实
 ```
 
 `verify-install.mjs` 里那组"客户端契约"断言值得单独说：它们守的是**让客户端半边能加载的
 每一条硬性要求**（`dsh.client` 声明、`exports["./client"]`、factory id 等于包名、bare-name 行、
-`lib/bundle.js` 导出 `apply`）。每一条都是被违反过、而且症状极不明显的那种。
+`lib/bundle.js` 导出 `apply`、不得注册无面板的 `sidebar.panellist`、只使用主题 token）。
+每一条都是被违反过、而且症状极不明显的那种。
+
+`check-docs.mjs` 守的是文档本身：它扫描 `docs/adding-a-ui-entry.md` 里提到的每个项目内路径
+是否真实存在、代码片段是否仍与 `lib/client.js` 等文件一致。**文档会腐烂，所以让它可执行。**
 
 端到端验证（需要浏览器控制、且需要 DSH 实例在跑）：
 
@@ -298,13 +303,19 @@ server/                       独立市场服务端（零依赖）
     └── http.js               HTTP 路由
 
 lib/                          本机插件（客户端）
-├── bundle.js                 组合包半边：**必须为空**（export {}）
-├── plugin.js                 host 行：下载 → 校验 → 解包 → 注册
+├── bundle.js                 裸包名入口：**必须导出 apply**（写成 export {} 会失败，见 §4.1.1）
+├── plugin.js                 host 行：下载 → 校验 → 解包 → 注册；并提供 /dsh-market/open
+├── client.js                 客户端半边：注册 sidebar.footer.action 原生入口
 └── tar.js                    受限 tar 读取（拒绝符号链接与路径逃逸）
 web/market.html               市场页面（自包含，无构建步骤）
-cordis.patch.yml              patch 层：一行 insert 指向 plugin.js
-tools/                        测试与本地夹具
+cordis.patch.yml              patch 层：两行 insert（宿主子路径 + 裸包名）
+docs/adding-a-ui-entry.md     **给 DSH 加插件入口的完整做法与踩坑记录**
+tools/                        测试、契约预检、只读诊断脚本
 ```
+
+> 想自己加一个 UI 入口，或者想知道这个入口为什么长这样，直接读
+> [`docs/adding-a-ui-entry.md`](docs/adding-a-ui-entry.md)。里面写了三条硬要求、
+> 症状对照表、插槽怎么选，以及本项目为此返工的每一个坑。
 
 ## 3. 已知限制
 
