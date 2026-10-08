@@ -54,16 +54,58 @@
   .btn-mini{padding:3px 8px;font-size:11px}
   .btn-danger{border-color:var(--error);color:var(--error)}
   .wrap{padding:16px 18px 40px;max-width:1180px}
-  .note{color:var(--label2);font-size:12px;line-height:1.65;border:1px dashed var(--border1);
-        border-radius:8px;padding:10px 12px;margin-bottom:14px;white-space:pre-wrap}
+  /**
+   * While the MARKET view is on screen, the page owns the viewport.
+   *
+   * Goal: the top stays a fixed-height header area, the cards get all remaining space and
+   * scroll inside it, and the pager sits in a footer that never leaves the screen. Before
+   * this, everything scrolled together, so with a full page of results the pager — the one
+   * control you need when the list is long — was off screen.
+   *
+   * Scoped with `:has()` because `market.css` is shared with the console, which manages its
+   * own scrolling and must not inherit any of this. The console already uses `:has()` for the
+   * same reason, so the engine support is a given.
+   */
+  body:has(#view-market:not(.hidden)){display:flex;flex-direction:column;height:100vh;
+                                      box-sizing:border-box;overflow:hidden}
+  body:has(#view-market:not(.hidden)) > header{flex:0 0 auto}
+  body:has(#view-market:not(.hidden)) > .wrap{flex:1 1 auto;min-height:0;display:flex;
+                                              flex-direction:column;/* bottom padding moves to the footer */
+                                              padding-bottom:0}
+  #view-market{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  /**
+   * `align-content:start` matters: a grid whose rows stretch would centre short rows and put
+   * a gap above the first card once it starts scrolling.
+   */
+  #view-market > .grid{flex:1 1 auto;min-height:0;overflow-y:auto;align-content:start;
+                       overscroll-behavior:contain;padding-right:4px}
+  .market-foot{flex:0 0 auto;border-top:1px solid var(--border1);background:var(--layer1);
+               /* Full-bleed inside `.wrap`, so the footer reads as a bar rather than a box. */
+               margin:0 -18px;padding:8px 18px 10px}
+  .market-foot .pager{margin-top:6px}
+  .market-foot .status{margin-top:0;border-top:0;padding-top:0}
+  .note{color:var(--label2);font-size:12px;line-height:1.6;margin-bottom:8px}
+  .note-line{display:block;overflow-wrap:anywhere}
   .note code{background:var(--layer2);padding:1px 5px;border-radius:4px}
-  .bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+  /* The folded explanation: a one-word toggle instead of six lines of prose. */
+  .note-more{margin-top:2px}
+  .note-more summary{cursor:pointer;color:var(--label2);font-size:11px;list-style:none;
+                     display:inline-block;opacity:.8}
+  .note-more summary:hover{opacity:1;color:var(--label)}
+  .note-more summary::-webkit-details-marker{display:none}
+  .note-more summary::before{content:'▸ '}
+  .note-more[open] summary::before{content:'▾ '}
+  .note-detail{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;
+               border-left:2px solid var(--border1);padding-left:9px}
+  .bar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
   input[type=search],input[type=text],input[type=password]{
        border:1px solid var(--border1);background:var(--layer1);color:var(--label);
        border-radius:6px;padding:7px 10px;font-size:12.5px;width:100%}
   select{border:1px solid var(--border1);background:var(--layer1);color:var(--label);
          border-radius:6px;padding:7px 10px;font-size:12.5px}
-  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+        /* Bottom room so the last row is not flush against the footer border. */
+        padding-bottom:10px}
   .card{border:1px solid var(--border1);background:var(--layer1);border-radius:9px;
         padding:12px 13px;display:flex;flex-direction:column;gap:8px}
   .name{font-weight:600;font-size:13px;word-break:break-all}
@@ -96,8 +138,10 @@
   .tab.is-on{background:var(--layer1);color:var(--label);box-shadow:0 1px 2px rgba(0,0,0,.08)}
   .pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
   .actions{display:flex;gap:8px;margin-top:auto;padding-top:4px}
-  .status{margin-top:18px;color:var(--label2);font-size:12px;line-height:1.7;
-          border-top:1px solid var(--border1);padding-top:12px;white-space:pre-wrap}
+  .status{margin-top:0;color:var(--label2);font-size:12px;line-height:1.7;
+          border-top:0;padding-top:0;white-space:pre-wrap;
+        /* Long results must not push the pager off the footer. */
+        max-height:5.1em;overflow-y:auto}
   .status.error{color:var(--error)}
   .installed{margin-top:22px}
   .installed h2{font-size:13px;margin:0 0 8px}

@@ -328,6 +328,99 @@ ok('  技能徽标有品牌色边框（不是默认灰）', styled !== null && s
   String(styled?.skillBorder))
 
 console.log('')
+console.log('--- 顶部紧凑、卡片滚动、分页固定在页脚 ---')
+/**
+ * The point of the layout: with more results than fit, the CARDS scroll and the pager stays
+ * put. Before this everything scrolled together, so the pager — the one control you need when
+ * the list is long — was the first thing pushed off screen.
+ *
+ * Asserted on geometry rather than on class names: a rule that exists but does not take
+ * effect looks identical to a working one from the source.
+ */
+{
+  const layout = await evaluate(`(() => {
+    const grid = document.getElementById('grid')
+    const foot = document.querySelector('.market-foot')
+    const pager = document.getElementById('pager')
+    const note = document.getElementById('note')
+    const detail = document.getElementById('note-detail')
+    const gr = grid.getBoundingClientRect()
+    const fr = foot.getBoundingClientRect()
+    return {
+      viewport: window.innerHeight,
+      footBottom: Math.round(fr.bottom),
+      footTop: Math.round(fr.top),
+      gridBottom: Math.round(gr.bottom),
+      cards: document.querySelectorAll('#grid .card').length,
+      gridScrollable: grid.scrollHeight > grid.clientHeight + 1,
+      gridOverflowY: getComputedStyle(grid).overflowY,
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      pagerInsideFooter: foot.contains(pager),
+      pagerBottom: Math.round(pager.getBoundingClientRect().bottom),
+      detailVisible: detail.getBoundingClientRect().height > 0,
+      noteHeight: Math.round(note.getBoundingClientRect().height),
+      // Debug fields: measure before judging.
+      detailsOpen: document.querySelector('.note-more').open,
+      detailDisplay: getComputedStyle(detail).display,
+      detailHeight: Math.round(detail.getBoundingClientRect().height),
+      detailText: (detail.textContent || '').length,
+      lineHeight: Math.round(document.getElementById('note-line').getBoundingClientRect().height),
+      summaryHeight: Math.round(document.querySelector('.note-more summary').getBoundingClientRect().height),
+    }
+  })()`)
+  ok('页脚完整落在视口内（不用滚动就能看到分页）',
+    layout.footBottom <= layout.viewport + 1 && layout.footTop > 0,
+    `页脚 ${layout.footTop}–${layout.footBottom} / 视口 ${layout.viewport}`)
+  ok('  分页在页脚里，而不是卡片区之后', layout.pagerInsideFooter === true)
+  ok('  卡片区自己滚动', layout.gridOverflowY === 'auto', String(layout.gridOverflowY))
+  ok('  内容确实超出（这个断言才有意义）', layout.gridScrollable === true,
+    `${layout.cards} 张卡片`)
+  ok('  页面本身不滚动（只有卡片区滚）', layout.bodyOverflow === 'hidden', String(layout.bodyOverflow))
+  /**
+   * Folded by default: the whole point is to give the space to the cards.
+   *
+   * Judged by `details.open`, NOT by the detail's height. Chromium hides a closed details'
+   * content with `content-visibility`, so the box is still laid out and
+   * `getBoundingClientRect().height` reports ~96px for content nobody can see. Measuring it
+   * that way reported "not folded" for a page whose screenshot plainly showed it folded.
+   */
+  ok('顶部说明默认折起', layout.detailsOpen === false, `open=${layout.detailsOpen}`)
+  ok('  紧凑行只占一行（不是六行说明）', layout.lineHeight > 0 && layout.lineHeight <= 25,
+    `${layout.lineHeight}px`)
+
+  // Scrolling the cards must not move the footer.
+  const beforeTop = layout.footTop
+  await evaluate(`document.getElementById('grid').scrollTop = 240`)
+  await sleep(250)
+  const afterTop = await evaluate(`Math.round(document.querySelector('.market-foot').getBoundingClientRect().top)`)
+  ok('  滚动卡片时页脚不动', afterTop === beforeTop, `${beforeTop} -> ${afterTop}`)
+
+  // Expanding the explanation takes space from the grid, not from the footer.
+  await evaluate(`document.querySelector('.note-more').open = true`)
+  await sleep(250)
+  const expanded = await evaluate(`(() => {
+    const grid = document.getElementById('grid')
+    const foot = document.querySelector('.market-foot')
+    return {
+      detailsOpen: document.querySelector('.note-more').open,
+      noteHeight: Math.round(document.getElementById('note').getBoundingClientRect().height),
+      footBottom: Math.round(foot.getBoundingClientRect().bottom),
+      gridScrollable: grid.scrollHeight > grid.clientHeight + 1,
+      viewport: window.innerHeight,
+    }
+  })()`)
+  ok('  展开后「说明」的状态为打开', expanded.detailsOpen === true, `open=${expanded.detailsOpen}`)
+  // The note must actually get taller when opened, or the toggle does nothing visible.
+  ok('  展开后顶部确实变高（说明真的显示出来了）',
+    expanded.noteHeight > layout.noteHeight + 40, `${layout.noteHeight} -> ${expanded.noteHeight}px`)
+  ok('  展开后页脚仍在视口内', expanded.footBottom <= expanded.viewport + 1,
+    `${expanded.footBottom} / ${expanded.viewport}`)
+  ok('  展开后卡片区仍可滚动（空间是从卡片区让出来的）', expanded.gridScrollable === true)
+  await evaluate(`document.querySelector('.note-more').open = false`)
+  await sleep(200)
+}
+
+console.log('')
 console.log('--- 点「技能」只剩技能 ---')
 await evaluate(`[...document.querySelectorAll('#kind-tabs .tab')].find((b) => b.dataset.kind === 'skill').click()`)
 await sleep(900)
@@ -386,6 +479,20 @@ if (SHOT_DIR !== null) {
   const shot = await send('Page.captureScreenshot', { format: 'png' })
   writeFileSync(join(SHOT_DIR, 'market-tabs.png'), Buffer.from(shot.result.data, 'base64'))
   console.log(`  截图: ${join(SHOT_DIR, 'market-tabs.png')}`)
+  /**
+   * A viewport-sized capture as well.
+   *
+   * The tall one above is useful for seeing whole cards, but it cannot show the thing this
+   * layout is FOR: with a realistic window the footer must stay visible while the cards
+   * scroll. Judging that needs a window that is actually too short for the results.
+   */
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 1100, height: 620, deviceScaleFactor: 1, mobile: false,
+  })
+  await sleep(400)
+  const small = await send('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(join(SHOT_DIR, 'market-fold.png'), Buffer.from(small.result.data, 'base64'))
+  console.log(`  截图: ${join(SHOT_DIR, 'market-fold.png')}`)
 }
 
 console.log('')

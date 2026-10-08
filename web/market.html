@@ -58,7 +58,21 @@
     decision — this page cannot grant itself anything.
   -->
   <section id="view-market" class="hidden">
-    <div class="note" id="note">加载中…</div>
+    <!--
+      One compact line, with the rest folded away.
+
+      This used to be six lines of prose above the cards — service URL, account, groups, DSH
+      account, profile path, two paragraphs about how authorization works, and the console
+      URL. On a laptop that is most of the visible area spent on text nobody reads twice, and
+      it pushed the catalog itself below the fold.
+    -->
+    <div class="note" id="note">
+      <span class="note-line" id="note-line">加载中…</span>
+      <details class="note-more">
+        <summary>说明</summary>
+        <div class="note-detail" id="note-detail"></div>
+      </details>
+    </div>
 
     <!--
       DSH account binding, offered rather than performed.
@@ -87,8 +101,16 @@
       <span class="meta" id="count"></span>
     </div>
     <div class="grid" id="grid"></div>
-    <div class="pager" id="pager"></div>
-    <div class="status" id="status"></div>
+    <!--
+      Footer: feedback and paging, pinned below the scrolling grid.
+
+      Both used to sit under the cards, so with a full page of results the pager was off
+      screen — the one control you need precisely when the list is long.
+    -->
+    <footer class="market-foot">
+      <div class="status" id="status"></div>
+      <div class="pager" id="pager"></div>
+    </footer>
   </section>
 </main>
 
@@ -164,9 +186,19 @@ function renderNote() {
   const bindLine = binding
     ? `DSH 账号：${binding.dshName || binding.dshUserId}（${binding.dshUserId}）`
     : `DSH 账号：${dshLabel()}`
-  $('note').textContent =
-    `服务端：${state.serviceUrl}\n` +
-    `已登录：${catalog.user?.displayName ?? catalog.user?.username}　权限组：${(catalog.groups || []).join('、') || '无组'}\n` +
+  /**
+   * One line on screen; everything else behind 「说明」.
+   *
+   * The visible line keeps only what changes how you read the list: which service, who you
+   * are, and which groups your permissions come from. The paths, the DSH account and the
+   * explanation of the authorization model are worth having and not worth the space — they
+   * were six lines above the cards.
+   */
+  $('note-line').textContent =
+    `服务端 ${state.serviceUrl ?? '(未知)'}　·　`
+    + `${catalog?.user?.displayName ?? catalog?.user?.username ?? '(未登录)'}`
+    + `　权限组 ${(catalog?.groups || []).join('、') || '无组'}`
+  $('note-detail').textContent =
     `${bindLine}\n` +
     `本机 profile：${state.profileDir ?? '(未知)'}\n` +
     /**
@@ -179,6 +211,11 @@ function renderNote() {
     '列出服务端的全部条目，每条标注你能否安装（默认拒绝，deny 优先）；不能装的会写明原因。\n' +
     '下载与判定在服务端，落盘在本机。\n' +
     `账号、权限、发布由管理员在服务端控制台处理：${consoleUrl}`
+}
+
+/** The compact line is also where load/error messages go. */
+function setNote(text) {
+  $('note-line').textContent = text
 }
 
 function cardOf(entry) {
@@ -341,7 +378,7 @@ async function refreshCatalog() {
 
 async function loadCatalog() {
   status('')
-  $('note').textContent = '加载中…'
+  setNote('加载中…')
   try {
     // `params` is a GETTER on the pager object, not a method — the same shape the admin
     // console reads via `pager[listName].params.limit`.
@@ -350,7 +387,7 @@ async function loadCatalog() {
     if (q !== '') params.set('q', q)
     const result = await service(`/dsh-market/catalog?${params}`)
     if (!result.ok) {
-      $('note').textContent = result.body?.detail || result.body?.code || `加载失败（HTTP ${result.status}）`
+      setNote(result.body?.detail || result.body?.code || `加载失败（HTTP ${result.status}）`)
       return
     }
     // The service reports the page, the total AND the tab counts, so the labels and the
@@ -780,7 +817,7 @@ S.init({
   onLogout: () => {
     catalog = null
     $('grid').textContent = ''
-    $('note').textContent = ''
+    setNote('')
     /**
      * Drop this device's binding secret.
      *

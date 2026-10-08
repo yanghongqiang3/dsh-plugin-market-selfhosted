@@ -963,6 +963,50 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   marketSource.includes('在此设备启用自动登录')
     ? ok('绑定行提供「在此设备启用自动登录」（不必先解绑）')
     : fail('关闭自动登录后没有就地重新启用的入口')
+
+    /**
+     * The market page's layout: compact top, scrolling cards, pinned footer.
+     *
+     * Checked here as well as in the browser probe because these are the parts a later CSS
+     * edit silently reverts — a stylesheet that stops applying looks exactly like one that
+     * was never written, and the page still "works".
+     */
+    const marketCss = fs.readFileSync(path.join(dir, 'web', 'market.css'), 'utf8')
+    /**
+     * Every regex here is bound to a NAME first.
+     *
+     * A line that begins with `/` is parsed as DIVISION continuing the previous expression,
+     * so `foo(...)` followed by a regex literal is a syntax error. That has now bitten this
+     * file three times, twice in code and once in the tests that check this code — hence the
+     * rule rather than another one-off fix.
+     *
+     * `[^]` matches any character including a newline, and unlike `[\s\S]` it needs no
+     * backslashes, which have been eaten in transit into this file before.
+     */
+    const footerHasPager = /<footer class="market-foot">[^]{0,400}?id="pager"/.test(marketSource)
+    footerHasPager
+      ? ok('分页在固定页脚里（不是卡片之后）')
+      : fail('分页仍在卡片之后 —— 结果一多就会被滚出屏幕')
+    const footerHasStatus = /id="grid"[^]{0,400}?<footer class="market-foot">[^]{0,300}?id="status"/.test(marketSource)
+    footerHasStatus
+      ? ok('  页脚里还有状态行（安装反馈不会被滚走）')
+      : fail('  状态行不在页脚里')
+    // The explanation must be FOLDED, not merely shortened.
+    const noteIsFolded = /<details class="note-more">[^]{0,200}?id="note-detail"/.test(marketSource)
+    noteIsFolded
+      ? ok('顶部说明折进 details（给卡片让出空间）')
+      : fail('顶部说明仍是常驻文本 —— 会占掉卡片的空间')
+    const gridScrolls = /#view-market > \.grid\{[^}]*overflow-y:auto/.test(marketCss)
+    gridScrolls
+      ? ok('  卡片区自己滚动')
+      : fail('  卡片区没有滚动容器')
+    marketCss.includes('body:has(#view-market:not(.hidden))')
+      ? ok('  布局用 :has(#view-market) 限定，控制台不受影响')
+      : fail('  布局没有限定作用域 —— market.css 是控制台共用的，会一起被改')
+    const footerHasRule = /\.market-foot\{[^}]*border-top/.test(marketCss)
+    footerHasRule
+      ? ok('  页脚有分隔线，读起来像页脚')
+      : fail('  页脚没有视觉分隔')
 }
 
 /**
