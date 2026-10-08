@@ -191,11 +191,24 @@ POST /dsh-market/uninstall      { name } → 删文件 + 摘注册
 
 ### 1.4 注册规则（踩过的坑）
 
-`dsh.profile.bundles` 里**只能放组合包**（每个都必须声明 `dsh.bundle`）。往里塞普通插件会让
-profile 加载失败。而只把文件复制进 `node_modules` 什么都不会挂载——DSH 只加载 patch 层插入的东西。所以：
+两件事必须分清，我在这里错过：
 
-- 声明了 `dsh.bundle` → 记入 `dsh.profile.bundles`
-- 普通插件 → 在 profile 的 `cordis.patch.yml` 里加一条 insert 行，并补一条 `file:` 依赖
+**① `dsh.profile.bundles` 里放的不是"插件"，而是"哪几层 patch 要生效"。**
+被列进去的唯一效果是：该包的 `dsh.bundle.patch` 被当作一层 patch 应用。
+**它本身不会变成一条 loader 行**——把文件复制进 `node_modules` 也一样，什么都不挂载。
+只有 patch 里 `- insert:` 出来的行才会挂载东西。
+
+判定"是不是组合包"的依据是 **`dsh.bundle.patch` 存在**，不是 `dsh.bundle` 存在。
+`dsh-app-boot` 用的就是 `dsh.bundle.patch !== void 0`，并且会为 `bundles` 里
+任何缺 patch 的包抛 `declares no dsh.bundle`——**整个 profile 加载失败**。
+（`lib/plugin.js` 起初写成 `Boolean(pkg.dsh.bundle)`，会踩这个坑，已改。）
+
+**② 所以注册方式取决于包提供了什么：**
+
+| 包提供 | 记到哪里 | 谁负责挂载 |
+|---|---|---|
+| `dsh.bundle.patch`（组合包） | `dsh.profile.bundles` | 它自己的 patch 层 |
+| 只是普通插件 | profile 的 `cordis.patch.yml` 加一条 insert 行 + `file:` 依赖 | 那条 insert 行 |
 
 托管行包在标记块里：
 
@@ -208,6 +221,11 @@ profile 加载失败。而只把文件复制进 `node_modules` 什么都不会�
 ```
 
 **运维人员自己的内容只当文本处理，卸载后逐字节还原**（测试里有断言）。
+
+> 关于 `lib/bundle.js` 为什么是空的：那只是**沿用官方惯例**。我原先在注释里断言
+> "组合包自己的入口做了事会被审计为失败行"——**这个说法不成立**。激活审计只问每条行的
+> fiber 是否到了 `active`，而 `apply` 正常返回的行就是 active，不管它做了什么。
+> 本包自己的诊断日志（`registered 5/5 routes`）就来自一条"做了事"的行。
 
 ### 1.5 联调测试（真实浏览器 + 真实服务端 + 真实 profile）
 

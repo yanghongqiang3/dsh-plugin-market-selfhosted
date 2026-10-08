@@ -1,29 +1,36 @@
 # DSH bundle patch layer for dsh-plugin-marketplace.
 #
-# Three requirements, each verified against shipped code in app.asar:
+# How this layer is read (verified against dsh-app-boot's applyEntryPatches):
 #
 #  1. The top level MUST be an insert list (`- insert:` wrapping the rows).
 #     A bare top-level row is read as an id-targeted override of an EXISTING
-#     row, not an insertion — the package would silently never enter the
+#     row, not an insertion — so the package would silently never enter the
 #     composition.
 #
-#  2. A row's `id` is a short addressable name; `name` is the package (or
-#     package subpath) the loader imports.
+#  2. A row's `id` is a short addressable name; `name` is what the loader
+#     imports, and it may be a package subpath (this row uses one).
 #
-#  3. The BEHAVIOUR belongs to the row, not to the bundle. Every shipped bundle
-#     has an empty host half (`export {}`); a bundle whose own entry does work is
-#     audited as a failing entry by the desktop host, which reports it as a fatal
-#     "web boot: N entry did not activate".
+#  3. A package listed in `dsh.profile.bundles` is NOT itself a loader row. Being
+#     in `bundles` only means "apply this package's dsh.bundle.patch as a layer".
+#     Rows exist because a patch inserts them — which is what the insert below
+#     does. Copying files into node_modules mounts nothing on its own.
 #
-# The browser half lives in THIS package's manifest (`dsh.client`), not in a
-# second package: a package listed in `dsh.profile.bundles` is itself a row, so
-# the bundle row carries the declaration. An extra client-only row consistently
-# failed to activate and is deliberately absent.
+# On the empty host half in lib/bundle.js: keeping a bundle's own entry free of
+# behaviour is a convention worth following, but it is NOT what the activation
+# audit enforces. That audit only checks whether each row's fiber reached
+# `active`, and a row whose `apply` ran is active whatever it did.
 #
-# Verify after a DSH restart:
-#   - ~/.dsh/plugin-marketplace-diag.log records "registered 7/7 routes"
-#   - a new icon appears in the sidebar (sidebar.panellist seat)
+# Not done here, and why: mounting a browser half (`dsh.client`) would need an
+# extra row whose `name` is the BARE package name, plus a classic-script bundle at
+# `exports["./client"]` that registers itself via `window.__ModuleLoader__.load`
+# with an id equal to that name. This package has no build step, so it has none.
+# The in-app entry is injected through `webserver/index-inject` instead — see
+# README §4.1 for why that is the channel the desktop shell actually consumes.
 
 - insert:
     - id: marketplace
       name: dsh-plugin-marketplace/plugin
+
+# Verify after a DSH restart: ~/.dsh/plugin-marketplace-diag.log should record
+#   [entry] registered webserver/index-inject rows (desktop + web shell)
+#   [register] registered 5/5 routes
