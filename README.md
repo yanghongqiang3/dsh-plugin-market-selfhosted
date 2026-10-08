@@ -208,25 +208,46 @@ catalog 报 1.0.0
 
 **客户端启动时向服务端问一句「你带的包是哪个版本」，不同就换上，下次启动生效。**
 
-发布新版本只有一步：
+#### 发布新版本只有两步
 
-```bash
-# 部署机上（改了 package.json 的 version 之后）
-node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.1.tgz
-# 或直接打包当前检出：
-node server/cli.mjs publish:self --dir .
+```powershell
+# ① 开发机 —— 先改版本号，再打包
+#    package.json  "version": "0.1.0"  ->  "0.1.1"
+node tools\pack-dist.mjs
+#   -> dist\dsh-plugin-marketplace-0.1.1.tgz
+
+# ② 服务器 —— 把包放上去（一条命令，不用重启服务端）
+$env:MARKET_DATA_DIR = '<服务端的数据目录>'      # 与 start-market.bat 用的一致
+node server\cli.mjs publish:self --archive dist\dsh-plugin-marketplace-0.1.1.tgz
 ```
 
 之后每台客户端**下次启动 DSH 时自动跟上**，不再需要分发 tgz、也不再需要手工 `dsh plugin add`。
+
+**版本号必须先改。** pnpm 按「路径 + 版本号」判定，只重打同版本的包再装，文件根本不会变
+（§0.3 末尾有实测）。
+
+**不要手动往 `artifacts\self` 拷文件。** 那个目录由 `publish:self` 自己写，而且要写两样：
+
+```
+artifacts\self\marketplace.tgz      包的字节
+artifacts\self\marketplace.json     版本 + sha256
+```
+
+**只放 tgz 是没用的** —— 服务端回答 `/dsh-market/self` 时读的是那个描述文件，
+没有它等于「没放包」，客户端只会记一条 `skipped`。
+
+**服务端不用重启。** 实测：放包前后各问一次 `/dsh-market/self`，未重启服务端版本就变了
+（`0.1.0` → `0.3.0`）。它每次请求都重新读盘并校验哈希。
+
+服务器上没有这个仓库时，用 `publish:self --dir .`：它按 npm 布局自己打包，**不需要 `tools/`**。
 
 #### 为什么放在服务端
 
 两件事逼出了这个设计：
 
-1. **市场没法分发它自己。** 市场存的是扁平归档（`inspectArchive` 在归档根读
-   `package.json`），而可安装的 npm tarball 必须把所有条目放在 `package/` 下 ——
-   否则 pnpm 会把 `lib/plugin.js` 装成 `plugin.js`（§7 有实测）。而且「用市场装市场」
-   本身就是循环。
+1. **市场没法分发它自己。** 市场存的是扁平归档，而可安装的 npm tarball 必须把所有条目放在
+   `package/` 下 —— 否则 pnpm 会把 `lib/plugin.js` 装成 `plugin.js`（§7 有实测）。
+   而且「用市场装市场」本身就是循环。
 2. **服务端和插件是一起部署的。** 谁更新服务端，手上就有新构建。所以服务端是那个包
    最自然的存放处，不需要再维护第二条分发通道。
 

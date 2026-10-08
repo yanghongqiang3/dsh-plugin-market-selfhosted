@@ -210,17 +210,61 @@ market 的制品格式以**扁平**为准，但 `inspectArchive` **现在也接�
 ## 8. 这个插件现在会自己更新（§5 的替代路径）
 
 从这一版起，客户端**启动时会问服务端要包**，不同就自动换上，下次启动生效。
-所以日常不再需要分发 tgz：
+所以日常升级不再需要分发 tgz。
 
-```bash
-# 部署机：改完 version、打好包之后
-node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.1.tgz
+### 发布新版本的完整步骤
+
+```powershell
+# ① 开发机 —— 先改版本号，再打包
+#    package.json  "version": "0.1.0"  ->  "0.1.1"
+node tools\pack-dist.mjs
+#   -> dist\dsh-plugin-marketplace-0.1.1.tgz
+
+# ② 服务器 —— 把包放上去（一条命令）
+$env:MARKET_DATA_DIR = '<服务端的数据目录>'    # 与 start-market.bat 用的一致
+node server\cli.mjs publish:self --archive dist\dsh-plugin-marketplace-0.1.1.tgz
 ```
 
-§5 那套手工 `dsh plugin add` 仍然有效（也是新机器的**首次**安装方式），
-但升级路径已经不需要它了。机制、硬约束（必须重启）、以及为什么拒绝链接安装，见 README §0.4。
+之后每台客户端**下次启动 DSH 时自动跟上**。
 
-**首次安装仍然要手工做**，因为那时客户端还没有这个插件，自然也没人去问服务端。
+#### 不要手动往 `artifacts\self` 拷文件
+
+那个目录由 `publish:self` 自己写，它要写**两样**东西：
+
+```
+<数据目录>\artifacts\self\marketplace.tgz     包的字节
+<数据目录>\artifacts\self\marketplace.json    版本 + sha256
+```
+
+**只放 tgz 不放 json 是没用的** —— 服务端回答 `GET /dsh-market/self` 时读的是那个
+描述文件，没有它就等于「没放包」，客户端只会记一条 `skipped`。
+
+#### 服务端不需要重启
+
+实测：放包前后各问一次 `/dsh-market/self`，**未重启服务端**就变了版本：
+
+```
+放包前                0.1.0  sha=822fe875682aca92
+放 0.3.0 后（未重启）  0.3.0  sha=faa45c8761caac21
+```
+
+服务端每次请求都重新读盘并**校验哈希**，所以换了字节会立刻反映出来。
+
+#### 服务器上没有这个仓库时
+
+`publish:self` 有两条路，第二条不需要开发机产出：
+
+```powershell
+node server\cli.mjs publish:self --archive <tgz>   # 已经打好包
+node server\cli.mjs publish:self --dir .           # 用服务器上的检出，自己按 npm 布局打包
+```
+
+`--dir` 会自己按 npm 布局（条目全在 `package/` 下）打包，**不需要 `tools/`**。
+
+§5 那套手工 `dsh plugin add` 仍然有效，而且**新机器的首次安装只能用它** ——
+那时客户端还没有这个插件，自然也没人去问服务端。
+
+机制、硬约束（必须重启）、以及为什么拒绝链接安装，见 README §0.4。
 
 ---
 
