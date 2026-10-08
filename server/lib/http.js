@@ -810,9 +810,38 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         return
       }
 
+      /**
+       * Warn when this exact name+version+channel is already registered — and say WHICH case
+       * it is.
+       *
+       * Republishing the same version is an UPSERT: the bytes and the row are replaced, but a
+       * client that already has that version compares equal and is offered no update. The two
+       * cases need different advice, and telling them apart is free here because the previous
+       * sha256 is already on the row:
+       *
+       *   - same bytes  -> the publish is a no-op. Nothing is wrong; nothing shipped either.
+       *   - new bytes   -> the change reaches NOBODY who already installed it. This is the trap
+       *                    in the obvious workflow ("I edited the skill, publish it again"),
+       *                    and the publisher has to be told to raise the version.
+       */
+      const resolvedChannel = channel ?? inspection.meta.channel ?? 'stable'
+      const existing = artifacts.get(inspection.pkg.name, inspection.pkg.version, resolvedChannel)
+      const archiveHash = sha256(archive)
+
       const preview = {
         name: inspection.pkg.name,
         version: inspection.pkg.version,
+        /** True when this publish will OVERWRITE an existing row for the same version. */
+        replacesExisting: existing !== null && existing !== undefined,
+        /**
+         * True when this exact version ALREADY HOLDS THESE EXACT BYTES — a no-op publish
+         * rather than a change that fails to ship.
+         */
+        sameContent: existing !== null && existing !== undefined && existing.sha256 === archiveHash,
+        existing:
+          existing === null || existing === undefined
+            ? null
+            : { sha256: existing.sha256, publishedAt: existing.publishedAt, publishedBy: existing.publishedBy },
         /**
          * Shown in the pre-check so a publisher sees "this is a skill" BEFORE committing.
          *

@@ -249,6 +249,61 @@ console.log('--- 通过 HTTP 上传发布（端到端）---')
   ok('  条目仍然齐全', JSON.stringify(listEntries(bytes).sort()) === '["SKILL.md","package.json"]',
     JSON.stringify(listEntries(bytes)))
 
+  console.log('')
+  console.log('--- 同版本重发：预检区分「内容没变」与「内容变了」---')
+  /**
+   * The two cases need different advice, and the row already carries the previous sha256, so
+   * telling them apart costs nothing:
+   *
+   *   - identical bytes -> a no-op publish. Nothing broken; nothing shipped either.
+   *   - changed bytes   -> the change reaches NOBODY who already installed it, because their
+   *                        version compares equal. This is the trap in the obvious workflow
+   *                        ("I edited the skill, publish it again").
+   *
+   * A warning that stops appearing looks exactly like a publish that works, so both are
+   * asserted at the route.
+   */
+  {
+    const repostSame = await upload(zipBytes)
+    ok('同一份字节再预检，报告会覆盖已有版本', repostSame.body?.wouldPublish?.replacesExisting === true,
+      String(repostSame.body?.wouldPublish?.replacesExisting))
+    ok('  并且认出内容完全相同（是空操作，不是"改了没生效"）',
+      repostSame.body?.wouldPublish?.sameContent === true, String(repostSame.body?.wouldPublish?.sameContent))
+
+    const CHANGED = `---\nname: zip-skill\ndescription: 说明。\n---\n\n正文改过了。\n`
+    const changed = zipWithPowerShell({
+      'package.json': SKILL_PKG,
+      'SKILL.md': CHANGED,
+      'references/notes.md': '# notes\n',
+    }, { wrapper: 'zip-skill' })
+    const repostChanged = await upload(readFileSync(changed.out))
+    ok('内容变了但版本没变时，明确报告内容不同',
+      repostChanged.body?.wouldPublish?.replacesExisting === true
+      && repostChanged.body?.wouldPublish?.sameContent === false,
+      JSON.stringify({
+        replacesExisting: repostChanged.body?.wouldPublish?.replacesExisting,
+        sameContent: repostChanged.body?.wouldPublish?.sameContent,
+      }))
+    /**
+     * A higher version is the fix — and where it comes from depends on the bundle.
+     *
+     * `SKILL_PKG` declares `version: 1.0.0`, and a package's OWN manifest wins over the form:
+     * the form field exists for bundles that have no version anywhere (see the synthesis
+     * path), not to silently override a package that states one. So the override is exercised
+     * on a SKILL.md-only bundle, which is the case the field is documented for.
+     */
+    const bare = zipWithPowerShell({ 'SKILL.md': CHANGED }, { wrapper: 'zip-skill' })
+    const bumped = await upload(readFileSync(bare.out),
+      `?name=${encodeURIComponent('@dsh-internal/zip-skill')}&version=1.0.1`)
+    ok('SKILL.md-only 的包可以用表单提高版本，且不再警告',
+      bumped.body?.wouldPublish?.version === '1.0.1' && bumped.body?.wouldPublish?.replacesExisting === false,
+      `${bumped.body?.wouldPublish?.version} replaces=${bumped.body?.wouldPublish?.replacesExisting}`)
+    // ...while a package that states its own version keeps it, even if the form disagrees.
+    const overridden = await upload(zipBytes, '?version=9.9.9')
+    ok('  自带 package.json 的包不被表单版本覆盖（包自己说了算）',
+      overridden.body?.wouldPublish?.version === '1.0.0', String(overridden.body?.wouldPublish?.version))
+  }
+
   app.server.close()
   app.db.close()
 }

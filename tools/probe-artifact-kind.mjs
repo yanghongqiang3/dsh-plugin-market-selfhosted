@@ -163,6 +163,54 @@ console.log('--- 迁移：旧库里没有 kind 列 ---')
 }
 
 console.log('')
+console.log('--- 同版本重发：覆盖，但客户端看不到更新 ---')
+/**
+ * The trap in the obvious workflow.
+ *
+ * "I edited the skill, publish it again" is an UPSERT on (name, version, channel): the bytes
+ * and the row are replaced, but a client that already has that version compares equal and is
+ * offered no update — so the change silently reaches nobody who installed it.
+ *
+ * The pre-check therefore has to SAY so. Asserted here, because a warning that quietly stops
+ * appearing looks exactly like a publish that works.
+ */
+{
+  const first = app.artifacts.publishFromDirectory(makeDir('repost-a', {
+    'package.json': JSON.stringify({ name: 'dot-skill', version: '1.0.0', description: '第一版' }),
+    'SKILL.md': '---\nname: dot-skill\ndescription: 第一版\n---\n\n正文\n',
+  }), { publishedBy: 'tester', state: 'published' })
+  ok('首次发布 1.0.0', first?.name === 'dot-skill' && first.version === '1.0.0', `${first?.name}@${first?.version}`)
+
+  // What the upload route looks up before committing — this is what drives the warning.
+  const existing = app.artifacts.get('dot-skill', '1.0.0', 'stable')
+  ok('  同版本已存在（预检据此警告）', Boolean(existing), String(existing?.sha256 ?? '').slice(0, 12))
+
+  // Rewrite the content, keep the version: the row is replaced, not duplicated.
+  const second = app.artifacts.publishFromDirectory(makeDir('repost-b', {
+    'package.json': JSON.stringify({ name: 'dot-skill', version: '1.0.0', description: '改了内容' }),
+    'SKILL.md': '---\nname: dot-skill\ndescription: 改了内容\n---\n\n新正文\n',
+  }), { publishedBy: 'tester', state: 'published' })
+  ok('  重发同版本会覆盖字节', second?.sha256 !== first?.sha256,
+    `${String(first?.sha256).slice(0, 8)} -> ${String(second?.sha256).slice(0, 8)}`)
+  ok('  不会多出一行（是 upsert，不是新增）',
+    app.artifacts.listVersions('dot-skill').length === 1,
+    JSON.stringify(app.artifacts.listVersions('dot-skill').map((a) => a.version)))
+  /**
+   * The consequence the warning is about: the catalog still reports 1.0.0, so a client that
+   * installed 1.0.0 compares equal and the page's update button stays hidden.
+   */
+  ok('  目录里仍只有 1.0.0（已装的人不会看到更新）',
+    app.artifacts.latest('dot-skill')?.version === '1.0.0', String(app.artifacts.latest('dot-skill')?.version))
+
+  app.artifacts.publishFromDirectory(makeDir('repost-c', {
+    'package.json': JSON.stringify({ name: 'dot-skill', version: '1.1.0', description: '新版' }),
+    'SKILL.md': '---\nname: dot-skill\ndescription: 新版\n---\n\n正文\n',
+  }), { publishedBy: 'tester', state: 'published' })
+  ok('提高版本后目录给出 1.1.0 —— 这时客户端才有更新',
+    app.artifacts.latest('dot-skill')?.version === '1.1.0', String(app.artifacts.latest('dot-skill')?.version))
+}
+
+console.log('')
 console.log('结论：')
 console.log('  · 服务端在发布时记录 plugin / bundle / skill，控制台据此标注与筛选。')
 console.log('  · 技能缺 SKILL.md、frontmatter 残缺或名字非法，一律在发布时拒绝。')

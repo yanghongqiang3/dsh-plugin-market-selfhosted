@@ -161,7 +161,7 @@
                 <input type="text" id="pub-name" placeholder="留空用 SKILL.md 的 name；要匹配作用域规则请填 @作用域/名字" />
               </label>
               <label class="field">版本（可留空）
-                <input type="text" id="pub-version" placeholder="留空用 frontmatter 的 version，否则 0.1.0" />
+                <input type="text" id="pub-version" placeholder="仅在包内没有版本信息时生效；否则以包为准" />
               </label>
             </div>
             <div class="form-row">
@@ -790,6 +790,22 @@ function renderGrants() {
 
 // ------------------------------------------------------------------- 发布
 
+/**
+ * Suggest the next patch version, for the warning above.
+ *
+ * A SUGGESTION, never applied automatically: the publisher decides the version, and quietly
+ * bumping it would make "what version is this?" depend on market state rather than on the
+ * bundle. Only used in the sentence that tells them how to fix the situation.
+ *
+ * Returns null for anything that is not plain `x.y.z`, so the message degrades to advice
+ * instead of printing a wrong number.
+ */
+function nextPatch(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version ?? ''))
+  if (match === null) return null
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`
+}
+
 function publishOptions() {
   const channel = $('pub-channel').value
   const state = $('pub-state').value
@@ -878,9 +894,30 @@ async function doCheck() {
       + `name=${synth.manifest.name}　version=${synth.manifest.version}。`
       + `名字若没有作用域，按作用域写的权限规则匹配不到它；换名字或版本请在上面填写后重新预检。）\n\n`
     : ''
+  /**
+   * Say out loud when this will OVERWRITE an existing version — and which case it is.
+   *
+   * The two cases need different advice, and conflating them makes the warning noise:
+   *   - identical bytes -> a no-op. Nothing is broken; nothing shipped either.
+   *   - changed bytes   -> the change reaches NOBODY who already installed it, because their
+   *                        version compares equal. This is the trap in the obvious workflow
+   *                        ("I edited the skill, publish it again").
+   */
+  let replaced = ''
+  if (pendingPublish?.replacesExisting === true) {
+    const when = new Date(pendingPublish.existing?.publishedAt ?? 0).toLocaleString()
+    replaced = pendingPublish.sameContent === true
+      ? `ℹ ${pendingPublish.name}@${pendingPublish.version}（${pendingPublish.channel}）已经存在，`
+        + `且内容完全相同（原发布于 ${when}）—— 这次发布会是**空操作**。\n\n`
+      : `⚠ ${pendingPublish.name}@${pendingPublish.version}（${pendingPublish.channel}）已经存在，`
+        + `但**内容不同**（原发布于 ${when}）。\n`
+        + `　已安装这个版本的客户端**收不到这次改动** —— 它们的版本号相同，页面不会出现更新按钮。\n`
+        + `　要让人收到，请提高版本号：在 SKILL.md 的 frontmatter 里加 \`version: ${nextPatch(pendingPublish.version)}\`，`
+        + `或在上面的「版本」框里填一个更高的版本再预检。\n\n`
+  }
   $('pub-preview').textContent =
     `将发布：${kindLabels[kind] ?? kind} ${pendingPublish?.name ?? ''}@${pendingPublish?.version ?? ''}\n`
-    + converted + derived
+    + converted + derived + replaced
     + '\n'
     + JSON.stringify(result.body, null, 2)
   $('pub-preview').classList.remove('hidden')

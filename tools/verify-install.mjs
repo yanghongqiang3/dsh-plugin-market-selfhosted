@@ -1028,6 +1028,36 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
 }
 
 /**
+ * Republishing a version must SAY that it overwrites one.
+ *
+ * `INSERT ... ON CONFLICT(name, version, channel) DO UPDATE` means the obvious workflow —
+ * "I edited the skill, publish it again" — replaces the bytes while every client that already
+ * has that version compares equal and is offered no update. The change then reaches nobody,
+ * silently. The pre-check distinguishes the two cases, and this is what keeps that distinction
+ * from disappearing.
+ */
+{
+  const httpSource2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  httpSource2.includes('replacesExisting')
+    ? ok('预检报告会覆盖已有版本')
+    : fail('预检不报告覆盖 —— 同版本重发会静默无效')
+  httpSource2.includes('sameContent')
+    ? ok('  并区分「内容没变」与「内容变了」（两种情况的建议不同）')
+    : fail('  不区分内容是否变化 —— 警告会变成噪音或误导')
+  const consoleSource3 = fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+  consoleSource3.includes('收不到这次改动')
+    ? ok('  控制台把后果说清楚（已安装的人收不到）')
+    : fail('  控制台不提后果 —— 发布者会以为改动发出去了')
+  consoleSource3.includes('nextPatch')
+    ? ok('  并给出可照做的建议（提高版本号）')
+    : fail('  只警告不给出路')
+  // The form field must not be presented as the normal path.
+  consoleSource3.includes('仅在包内没有版本信息时生效')
+    ? ok('  表单的版本框说明了自己只在包内无版本时生效')
+    : fail('  版本框没有说明适用范围 —— 会让人以为它能覆盖包的声明')
+}
+
+/**
  * SKILL support.
  *
  * Skills are not loader entries: they are catalog items the agent reads on demand. So an
