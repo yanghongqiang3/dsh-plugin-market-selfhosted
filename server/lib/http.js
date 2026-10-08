@@ -712,6 +712,32 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
   })
 
   /**
+   * Release YOUR OWN binding.
+   *
+   * Deliberately not an administrator action. The binding is the user's own account
+   * link, and requiring an administrator to undo it means a mistyped sign-in becomes
+   * a support ticket. It takes no identifier at all — the binding released is the one
+   * belonging to the caller's token, so there is nothing to forge and no way to touch
+   * anyone else's.
+   *
+   * The administrative route below still exists for the case the user cannot act on:
+   * a DSH account whose owner is gone, or a market account being reassigned.
+   */
+  route('POST', '/dsh-market/identity/unbind', (req, res, caller) => {
+    const current = store.bindingForMarket(caller.user.username)
+    if (current === null) {
+      json(res, 404, { ok: false, code: 'E_NOT_BOUND' })
+      return
+    }
+    const result = store.unbindDshAccount({ dshUserId: current.dshUserId, by: caller.user.username })
+    if (!result.ok) {
+      json(res, 404, { ok: false, code: result.code })
+      return
+    }
+    json(res, 200, { ok: true, binding: result.binding })
+  })
+
+  /**
    * Every binding, for the console.
    *
    * Being able to SEE who holds a slot is what makes the one-to-one rule workable:

@@ -293,6 +293,36 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     } else {
       fail('install page has no binding UI')
     }
+
+    /**
+     * Unbinding is the USER'S action, not an administrator's.
+     *
+     * The operator's rule. The first implementation locked it to administrators — and
+     * the install page's button was disabled for everyone, the administrator included,
+     * so nobody could release a binding from the page at all. Releasing your own
+     * account link has to be yours to do.
+     */
+    if (market.includes('/dsh-market/identity/unbind')) {
+      ok('install page can release the binding itself')
+    } else {
+      fail('install page cannot unbind — releasing the user own link would need an administrator')
+    }
+    if (/addEventListener\('click',\s*doUnbind\)/.test(market)) {
+      ok('an explicit click performs the unbinding')
+    } else {
+      fail('no explicit unbind action on the install page')
+    }
+    if (market.includes('需管理员')) {
+      fail('install page still tells the user unbinding needs an administrator')
+    } else {
+      ok('install page does not defer unbinding to an administrator')
+    }
+    // The self-unbind route carries no identifier: it releases the caller's own link.
+    if (/identity\/unbind[\s\S]{0,140}?(dshUserId|marketUsername)/.test(market)) {
+      fail('install page sends an identifier to /identity/unbind — it must release the caller own link')
+    } else {
+      ok('install page sends no identifier when unbinding itself')
+    }
   }
 
   const consolePath2 = path.join(dir, 'web', 'console.html')

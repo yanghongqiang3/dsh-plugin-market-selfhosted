@@ -127,6 +127,71 @@ const spoof = await call('POST', '/dsh-market/identity/bind', {
 ok('请求体里的 marketUsername 被忽略，绑给令牌归属者', spoof.body?.binding?.marketUsername === 'bob', JSON.stringify(spoof.body?.binding))
 
 console.log('')
+console.log('--- 用户自己解绑（不需要管理员）---')
+/**
+ * Unbinding is the user's OWN account link, so it is theirs to release. Requiring an
+ * administrator turned a mistyped sign-in into a support ticket — and the install
+ * page's button was disabled for EVERYONE, including the administrator. That is how
+ * this was reported.
+ *
+ * The route takes no identifier: it releases the binding belonging to the caller's
+ * token. Both halves of that are pinned here.
+ */
+const anonSelfUnbind = await call('POST', '/dsh-market/identity/unbind', {})
+ok('未登录不能自解绑', anonSelfUnbind.status === 401, `status=${anonSelfUnbind.status}`)
+
+// bob holds dsh-ccc; he must not be able to name alice's binding in a body field.
+const bobUnbind = await call('POST', '/dsh-market/identity/unbind', {
+  token: bobToken,
+  body: { dshUserId: 'dsh-aaa', marketUsername: 'alice' },
+})
+const bobAfter = await call('GET', '/dsh-market/identity/me', { token: bobToken })
+const aliceAfter = await call('GET', '/dsh-market/identity/me', { token: aliceToken })
+ok('自解绑本身成功', bobUnbind.status === 200, `status=${bobUnbind.status} code=${bobUnbind.body?.code}`)
+ok(
+  '自解绑只解自己的，忽略请求体里的标识',
+  bobAfter.body?.binding === null && aliceAfter.body?.binding?.dshUserId === 'dsh-aaa',
+  `bob=${JSON.stringify(bobAfter.body?.binding)} alice=${JSON.stringify(aliceAfter.body?.binding)}`,
+)
+const repeatUnbind = await call('POST', '/dsh-market/identity/unbind', { token: bobToken })
+ok(
+  '未绑定时自解绑返回 404',
+  repeatUnbind.status === 404 && repeatUnbind.body?.code === 'E_NOT_BOUND',
+  JSON.stringify(repeatUnbind.body),
+)
+
+// Releasing must free the DSH SIDE, which is the half a user cannot otherwise recover.
+//
+// Driven from alice's own account. The first version handed the freed DSH id to `bob`
+// instead — who still holds `dsh-ccc`, so it failed on the MARKET side and tested
+// nothing about the freed slot. A second version then read `aliceAfter` (captured
+// BEFORE this unbind) and asserted on that stale snapshot. Both were wrong for reasons
+// unrelated to what the check claimed to test, which is the failure mode this whole
+// file exists to avoid.
+const aliceFree = await call('POST', '/dsh-market/identity/unbind', { token: aliceToken })
+ok('alice 自解绑返回 200', aliceFree.status === 200, `status=${aliceFree.status} code=${aliceFree.body?.code}`)
+const aliceNow = await call('GET', '/dsh-market/identity/me', { token: aliceToken })
+ok('alice 自解绑后确实未绑定', aliceNow.body?.binding === null, JSON.stringify(aliceNow.body?.binding))
+
+const aliceToNewDsh = await call('POST', '/dsh-market/identity/bind', {
+  token: aliceToken,
+  body: { dshUserId: 'dsh-new' },
+})
+ok(
+  '被释放的名额可以换绑到另一个 DSH 账号',
+  aliceToNewDsh.status === 200 && aliceToNewDsh.body?.binding?.dshUserId === 'dsh-new',
+  JSON.stringify(aliceToNewDsh.body?.binding),
+)
+// Restore the fixture the administrator section below expects.
+await call('POST', '/dsh-market/identity/unbind', { token: aliceToken })
+const restored = await call('POST', '/dsh-market/identity/bind', { token: aliceToken, body: { dshUserId: 'dsh-aaa' } })
+ok(
+  '恢复现场：alice 重新绑回 dsh-aaa',
+  restored.status === 200 && restored.body?.binding?.dshUserId === 'dsh-aaa',
+  JSON.stringify(restored.body?.binding),
+)
+
+console.log('')
 console.log('--- 管理员解绑 ---')
 const notAdmin = await call('POST', '/dsh-market/admin/identity/unbind', {
   token: aliceToken,

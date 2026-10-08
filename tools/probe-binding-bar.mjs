@@ -52,6 +52,7 @@ const send = (method, params = {}) => new Promise((resolve) => {
   pending.set(id, resolve)
   socket.send(JSON.stringify({ id, method, params }))
 })
+const acceptDialog = () => send('Page.handleJavaScriptDialog', { accept: true })
 const evaluate = async (expression) => {
   const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true })
   return result.result?.result?.value
@@ -94,15 +95,28 @@ console.log(report)
 
 // With `--click`, actually press the button and report the result. A button that
 // renders but does nothing is exactly the failure this project keeps producing.
+//
+// `--accept-dialog` answers the unbind confirmation, which is guarded by `confirm()`;
+// without it the click would silently do nothing and the probe would look like a
+// failure of the feature rather than of the probe.
 if (process.argv.includes('--click')) {
+  if (process.argv.includes('--accept-dialog')) {
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data)
+      if (message.method === 'Page.javascriptDialogOpening') acceptDialog()
+    })
+    await send('Page.enable')
+  }
   const clicked = await evaluate(`(async () => {
     const btn = document.getElementById('binding')?.querySelector('button');
     if (!btn) return 'no-button';
     if (btn.disabled) return 'disabled';
+    const pressed = btn.textContent;
     btn.click();
-    await new Promise((r) => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 3000));
     const bar = document.getElementById('binding');
     return JSON.stringify({
+      pressed,
       barText: bar?.textContent.trim() ?? null,
       buttonLabel: bar?.querySelector('button')?.textContent ?? null,
       buttonEnabled: bar?.querySelector('button') ? !bar.querySelector('button').disabled : null,
@@ -118,3 +132,4 @@ console.log(errors.length === 0 ? '  （无）' : errors.map((e) => `  ${e}`).jo
 
 socket.close()
 browser.kill()
+

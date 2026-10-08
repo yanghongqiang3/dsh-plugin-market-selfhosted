@@ -424,10 +424,11 @@ async function renderBinding() {
 
   if (binding) {
     line.textContent = `已绑定 DSH 账号：${binding.dshName || '(无显示名)'}　${binding.dshUserId}`
-    // Unbinding is one-to-one bookkeeping that affects both sides, so it stays with
-    // the administrator in the server console rather than in an installer's UI.
-    action.textContent = '解绑（需管理员）'
-    action.disabled = true
+    // Unbinding releases the user's OWN account link, so it is theirs to do. Requiring
+    // an administrator turned a mistyped sign-in into a support ticket, and an
+    // administrator hit the same wall: the button was disabled for everyone.
+    action.textContent = '解绑'
+    action.addEventListener('click', doUnbind)
     return
   }
 
@@ -469,6 +470,38 @@ async function doBind() {
   } else {
     reportBindFailure(result)
   }
+  await renderBinding()
+  if (catalog) renderNote()
+}
+
+/**
+ * Release this user's own binding.
+ *
+ * The service route takes no identifier: it releases the binding that belongs to the
+ * caller's token. So there is nothing to confirm here about WHICH binding — only
+ * about doing it at all, and a confirmation is enough for an action that is
+ * reversible by simply binding again.
+ */
+async function doUnbind() {
+  const who = binding?.dshName || binding?.dshUserId || '当前 DSH 账号'
+  if (!confirm(`解除绑定：${who}？\n\n解绑后可以重新绑定，或换绑到另一个账号。`)) return
+  const button = $('binding').querySelector('button')
+  if (button) { button.disabled = true; button.textContent = '解绑中…' }
+  try {
+    const result = await service('/dsh-market/identity/unbind', { method: 'POST' })
+    if (!result.ok) {
+      status(`解绑失败：${result.body?.detail || result.body?.code || '未知原因'}`, true)
+    } else {
+      status('已解绑。')
+    }
+  } catch (error) {
+    status(`解绑失败：${error?.message ?? error}`, true)
+  }
+  // Re-read rather than assuming: the server is the authority on whether it took.
+  try {
+    const mine = await service('/dsh-market/identity/me')
+    binding = mine.body?.binding ?? null
+  } catch { /* keep the previous value; renderBinding will show it */ }
   await renderBinding()
   if (catalog) renderNote()
 }
