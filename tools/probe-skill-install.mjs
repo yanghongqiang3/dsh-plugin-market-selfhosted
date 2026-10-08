@@ -216,6 +216,29 @@ ok('  没有写 dsh.profile.bundles', !profile.dsh.profile.bundles.includes(entr
 ok('  没有加 file: 依赖', profile.dependencies === undefined || profile.dependencies[entry('skill-release-checklist').name] === undefined)
 
 console.log('')
+console.log('--- 技能与插件走同一套权限（不能因为它是 skill 就绕过）---')
+/**
+ * The skill branch lives inside `installEntry`, which fetches the bytes from the service
+ * FIRST with the caller's token. Authorization is the service's answer to that download, so
+ * a branch placed before it would have been a hole. Asserted, not assumed: a user with no
+ * grants must be refused.
+ */
+await call('POST', '/dsh-market/admin/users', { username: 'bob', password: 'bob-initial-2026' }, admin)
+const bobFirst = await call('POST', '/dsh-market/auth/login', { username: 'bob', password: 'bob-initial-2026' })
+await call('POST', '/dsh-market/auth/password', { newPassword: 'bob-password-2026' }, bobFirst.body.token)
+const bob = (await call('POST', '/dsh-market/auth/login', { username: 'bob', password: 'bob-password-2026' })).body.token
+const skillEntry = entry('skill-release-checklist')
+const denied = await invoke('/dsh-market/install', {
+  token: bob, name: skillEntry.name, version: skillEntry.version,
+  sha256: skillEntry.sha256, channel: skillEntry.channel,
+})
+ok('没有授权的用户装不了技能', denied.body?.ok === false, JSON.stringify(denied.body).slice(0, 110))
+ok('  拒绝原因来自服务端（不是本地放行）', typeof denied.body?.code === 'string' && denied.body.code !== '', String(denied.body?.code))
+const afterDenial = await getInstalled()
+ok('  这次拒绝不影响别人已装的东西', afterDenial.entries.filter((e) => e.kind === 'skill').length === 1,
+  JSON.stringify(afterDenial.entries.map((e) => `${e.kind}:${e.name}`)))
+
+console.log('')
 console.log('--- 非法技能被拒（不是半装）---')
 const noFile = await invoke('/dsh-market/install', {
   token: alice, name: entry('skill-no-file').name, version: entry('skill-no-file').version,
