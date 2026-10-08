@@ -690,6 +690,58 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     : fail('prune() 的返回值在删除设备流时被带走了')
 }
 
+/**
+ * Self-update: the plugin adopts the package the service carries.
+ *
+ * The guards matter more than the happy path here. An auto-update writes into a LIVE
+ * install, so the two ways it could do serious damage are checked explicitly:
+ * writing through a linked install (which would destroy a working tree), and touching
+ * the live directory before a complete replacement is staged.
+ */
+{
+  const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+  pluginSource.includes('/dsh-market/self')
+    ? ok('插件向服务端查自身版本')
+    : fail('插件没有自更新入口')
+  pluginSource.includes('isSymbolicLink')
+    ? ok('自更新会识别链接安装')
+    : fail('自更新没有链接检测 —— 会写穿到源码目录')
+  pluginSource.includes('MARKET_AUTO_UPDATE')
+    ? ok('自更新有开关（MARKET_AUTO_UPDATE=0）')
+    : fail('自更新没有开关')
+  pluginSource.includes('stripPrefix')
+    ? ok('自更新按 npm 布局剥掉 package/ 前缀')
+    : fail('自更新没有处理 npm 布局的 package/ 前缀')
+  // The ordering that keeps an interrupted download from breaking a working install.
+  const stagingAt = pluginSource.indexOf('.staging')
+  const parkedAt = pluginSource.indexOf('.previous')
+  if (stagingAt > 0 && parkedAt > 0 && stagingAt < parkedAt) {
+    ok('先暂存再换版（暂存的代码在换版之前）')
+  } else {
+    fail('暂存与换版的顺序不对 —— 运行中的安装可能在下载中途就被破坏')
+  }
+
+  const httpSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  httpSource.includes("'/dsh-market/self'")
+    ? ok('服务端暴露 /dsh-market/self')
+    : fail('服务端没有 /dsh-market/self')
+  httpSource.includes("'/dsh-market/self/download'")
+    ? ok('服务端暴露 /dsh-market/self/download')
+    : fail('服务端没有 /dsh-market/self/download')
+  const cliSource = fs.readFileSync(path.join(dir, 'server', 'cli.mjs'), 'utf8')
+  cliSource.includes("case 'publish:self'")
+    ? ok('CLI 有 publish:self')
+    : fail('CLI 没有放包的入口')
+
+  // The market plugin must stay OUT of the catalog: it is the client, not something a
+  // group is granted, and offering it there would let it be "installed" through a path
+  // whose format it cannot use.
+  const artifactsSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'artifacts.js'), 'utf8')
+  artifactsSource.includes('$selfDir') || artifactsSource.includes('this.selfDir')
+    ? ok('自身包存放在 artifacts 表之外')
+    : fail('自身包混进了市场制品存储')
+}
+
 resolveSpec(PKG)
 resolveSpec(`${PKG}/plugin`)
 

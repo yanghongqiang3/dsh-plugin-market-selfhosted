@@ -204,7 +204,81 @@ catalog 报 1.0.0
 19 项断言覆盖这些规则，含 `1.10.0 > 1.9.0`、`1.0.0 > 1.0.0-rc.1`、`rc.10 > rc.9`、
 `alpha < alpha.1 < beta < rc < 正式`、构建元数据不参与排序。
 
-### 0.4 本机运维命令
+### 0.4 插件自己的自动更新
+
+**客户端启动时向服务端问一句「你带的包是哪个版本」，不同就换上，下次启动生效。**
+
+发布新版本只有一步：
+
+```bash
+# 部署机上（改了 package.json 的 version 之后）
+node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.1.tgz
+# 或直接打包当前检出：
+node server/cli.mjs publish:self --dir .
+```
+
+之后每台客户端**下次启动 DSH 时自动跟上**，不再需要分发 tgz、也不再需要手工 `dsh plugin add`。
+
+#### 为什么放在服务端
+
+两件事逼出了这个设计：
+
+1. **市场没法分发它自己。** 市场存的是扁平归档（`inspectArchive` 在归档根读
+   `package.json`），而可安装的 npm tarball 必须把所有条目放在 `package/` 下 ——
+   否则 pnpm 会把 `lib/plugin.js` 装成 `plugin.js`（§7 有实测）。而且「用市场装市场」
+   本身就是循环。
+2. **服务端和插件是一起部署的。** 谁更新服务端，手上就有新构建。所以服务端是那个包
+   最自然的存放处，不需要再维护第二条分发通道。
+
+接口是两条，都不需要认证：`GET /dsh-market/self` 报版本与 sha256，
+`GET /dsh-market/self/download` 给字节。它们**不在 catalog 里**，也不受 `policy` 管辖——
+这不是市场数据，而是「正在跟这个服务端说话的那个客户端」。
+
+#### 硬约束：必须重启才生效
+
+**运行中的插件无法替换自己已加载的代码。** 实测（`tools/probe-swap-mechanics.mjs`）：
+覆盖一个已加载的 `.js` 在这台机器上**会成功**，但进程仍然从内存里执行**旧代码**。
+所以自动更新只能做到「把新版本准备好」，生效要等下次启动。
+
+**做不到「装完立刻生效」**——那需要重启 DSH，而那不是插件能做的事。
+
+#### 链接安装一律拒绝
+
+`node_modules/dsh-plugin-marketplace` 经常是个**链接**：pnpm 的布局，以及开发时把
+profile 指向工作树。**往这种路径里写会写穿到真实源码。** 实测
+`lstat().isSymbolicLink()` 为真、`readlink()` 给出目标。
+
+所以检测到链接就**拒绝自动更新**，只在诊断日志里记一条 `refused`。这是有意的：
+自动更新绝不能悄悄改掉某人的工作树。
+
+#### 换版怎么做的（不破坏现场）
+
+```
+下载 → 校验 sha256（与 /self 报的一致 + 响应头一致）
+     → 解到 <target>.staging，验证里面的 package.json 就是它声称的版本
+     → rename(target -> .previous)，rename(.staging -> target)
+     → 删掉 .previous
+```
+
+**先把新树完整准备好，再动物料**：下载中断或校验失败时，运行中的安装**一个字节都没变**。
+两次 rename 之间失败会把 `.previous` 挪回去。
+
+#### 失败一律不致命
+
+| 情况 | 行为 |
+|---|---|
+| 服务端没放包 | `skipped`，继续跑现有的 |
+| 版本相同或服务端更旧 | `current`，什么都不做 |
+| 是链接安装 | `refused`，不动 |
+| 下载失败 / sha 不符 / 解包失败 | `failed`，运行中的安装保持不变 |
+
+全部记进诊断日志（`.dsh\plugin-marketplace-diag.log` 的 `[self-update]` 行）。
+关掉自动更新：环境变量 `MARKET_AUTO_UPDATE=0`。
+
+> **「发布」这一步无法自动化**：总得有人把新包放到服务器上。所以这是
+> 「一次发布，客户端自动跟上」，不是无人值守。
+
+### 0.5 本机运维命令
 
 ```powershell
 & $node server\cli.mjs bootstrap
@@ -218,7 +292,7 @@ catalog 报 1.0.0
 & $node server\cli.mjs user:status --username alice --status disabled
 ```
 
-### 0.5 插件包要准备什么
+### 0.6 插件包要准备什么
 
 `package.json` 必需（要有 `name` 与 `version`）。可选一个 `market.json`：
 
@@ -230,7 +304,7 @@ catalog 报 1.0.0
 `state` 可以是 `draft` / `review` / `published` / `revoked`；**只有 `published` 可被安装**。
 缺省字段从 `package.json` 推断。
 
-### 0.6 接口
+### 0.7 接口
 
 ```
 GET  /dsh-market/health                     无需认证
@@ -246,6 +320,8 @@ POST /dsh-market/identity/bind              把令牌所属的市场账号与 DS
 GET  /dsh-market/identity/me                看自己的绑定
 POST /dsh-market/identity/unbind            解除自己的绑定（不需要管理员）
 GET  /dsh-market/identity/lookup            未登录；只回答某个 DSH 账号是否已被占用
+GET  /dsh-market/self                        未登录；服务端携带的插件自身版本 + sha256
+GET  /dsh-market/self/download               未登录；该包的字节
 GET  /dsh-market/admin/identity             列出全部绑定（仅 admin）
 POST /dsh-market/admin/identity/unbind      按任一侧解绑（仅 admin）
 POST /dsh-market/publish                    上传归档；默认 dry run，?commit=1 写入（仅 admin）
@@ -268,19 +344,19 @@ POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artif
 > 页面里的激活视图与 `runActivate`。`dsh_bindings.device_id` 是**另一回事**
 > （DSH 设备指纹），未受影响。
 
-### 0.7 三条不可动摇的规则
+### 0.8 三条不可动摇的规则
 
 1. **默认拒绝** —— 没有任何规则授予就不能装（连管理员也一样，`E_NO_GROUP`）。
 2. **deny 优先** —— 命中任一 deny 规则即拒绝，无论有多少 allow。
 3. **变更即时生效** —— 停用账号会当场吊销其全部会话，旧令牌下一个请求就是 401。
 
-### 0.8 制品的可信链条
+### 0.9 制品的可信链条
 
 发布时算 sha256 存库；下载时**服务端先把磁盘上的字节重新哈希一遍**，不一致就拒绝下发
 （`E_HASH_MISMATCH` + 审计 `artifact.corrupt`），而不是把可疑字节发出去让客户端发现。
 归档是**确定性打包**（mtime 固定为 0、条目排序），同样的目录树永远得到同样的哈希。
 
-### 0.9 服务端测试
+### 0.10 服务端测试
 
 ```powershell
 & $node tools\test-server.mjs     # 57 项：引导/登录/权限/发布/下载/哈希/设备码/审计

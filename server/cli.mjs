@@ -17,8 +17,11 @@
  *   node server/cli.mjs bind:rm    --dsh-user <DSH 账号 ID> | --user alice
  *   node server/cli.mjs catalog | audit [--limit 50] | prune
  *
+ *   node server/cli.mjs publish:self [--archive dist/xxx.tgz | --dir .]
+ *       把「插件市场自己」的包放到服务端，客户端启动时会自动取用（见 §1.7）。
+ *
  *   DSH 账号与市场账号是「一对一」绑定：一个 DSH 账号只能绑一个市场账号，反之亦然。
- *   bind:add 用于管理员修复关系；正常情况下页面在登录时自己完成绑定。
+ *   bind:add 用于管理员修复关系；正常情况下由用户在安装页自行绑定。
  *   bind:rm 可以按任意一侧释放，因为变更可能发生在任意一侧。
  *
  * ── 发布插件（不需要服务器 shell 权限，CI 也能用）────────────────────────────
@@ -31,11 +34,13 @@
  *
  * 给了 --service 或本地已有令牌时，publish 走 HTTP 上传；否则直接写本机数据库。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { openDatabase } from './lib/db.js'
 import { Store, DEFAULT_ADMIN } from './lib/store.js'
 import { Artifacts } from './lib/artifacts.js'
+import { packTarGz } from './lib/pack.js'
 import { DB_FILE, STORAGE_DIR, describePaths } from './lib/paths.js'
 import {
   forgetToken,
@@ -46,6 +51,62 @@ import {
   storeToken,
   TOKEN_FILE,
 } from './lib/publisher.js'
+
+/**
+ * Pack a checkout in the NPM tarball layout: every entry under `package/`.
+ *
+ * This is what makes the result installable by pnpm at all. Measured both ways: entries
+ * at the archive root install as a FLAT package (`lib/plugin.js` becomes `plugin.js`),
+ * `exports` then point at files that do not exist, and both loader rows fail with
+ * `failed to import`. `tools/pack-dist.mjs` does the same thing for distribution; this
+ * copy exists so a deployment needs nothing from `tools/`.
+ */
+function packWithNpmRoot(root, pkg) {
+  const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
+  // `lib/plugin.js` imports the shared semver module, so it has to ship with the client.
+  // Leaving it out yields a package that installs cleanly and then fails to import.
+  const INCLUDE_FILES = ['server/lib/version.js']
+  const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
+  const stage = mkdtempSync(join(tmpdir(), 'dsh-self-'))
+  try {
+    const inner = join(stage, 'package')
+    mkdirSync(inner, { recursive: true })
+    for (const item of INCLUDE) {
+      const from = join(root, item)
+      let stat
+      try { stat = statSync(from) } catch { continue }
+      const to = join(inner, item)
+      if (stat.isDirectory()) {
+        cpSync(from, to, { recursive: true, filter: (src) => !SKIP.has(src.split(/[\\/]/).pop()) })
+      } else {
+        mkdirSync(dirname(to), { recursive: true })
+        copyFileSync(from, to)
+      }
+    }
+    for (const item of INCLUDE_FILES) {
+      const from = join(root, item)
+      if (!existsSync(from)) throw new Error(`missing required file: ${item}`)
+      const to = join(inner, item)
+      mkdirSync(dirname(to), { recursive: true })
+      copyFileSync(from, to)
+    }
+    const entries = []
+    const walk = (dir, prefix) => {
+      for (const name of readdirSync(dir)) {
+        const rel = prefix === '' ? name : `${prefix}/${name}`
+        if (statSync(join(dir, name)).isDirectory()) walk(join(dir, name), rel)
+        else entries.push(rel)
+      }
+    }
+    walk(stage, '')
+    const atRoot = entries.filter((entry) => !entry.startsWith('package/'))
+    if (atRoot.length > 0) throw new Error(`staging tree has entries outside package/: ${atRoot.join(', ')}`)
+    void pkg
+    return packTarGz(stage, entries)
+  } finally {
+    rmSync(stage, { recursive: true, force: true })
+  }
+}
 
 function flags(argv) {
   const out = { _: [] }
@@ -538,6 +599,45 @@ switch (command) {
     const { db, store } = open()
     const result = store.prune()
     console.log(`已清理过期会话 ${result.sessions} 个`)
+    db.close()
+    break
+  }
+
+  /**
+   * Stage the market's OWN plugin package, so clients can auto-update from this service.
+   *
+   * Separate from `publish` on purpose. `publish` sends an artifact through the market's
+   * flat archive format and the `policy` gate; this package must keep its entries under
+   * `package/` to be installable by pnpm at all (§7 of docs/distributing.md), and it is
+   * not granted to anyone — it IS the client. Both facts make reusing `publish` wrong
+   * rather than merely inconvenient.
+   *
+   *   node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.0.tgz
+   *   node server/cli.mjs publish:self --dir .          # packs it here, same layout
+   */
+  case 'publish:self': {
+    const { db, artifacts } = open()
+    const archivePath = args.archive ?? args._[0]
+    let archive
+    if (archivePath) {
+      archive = readFileSync(resolve(archivePath))
+    } else {
+      // Pack a checkout using the npm layout: stage a directory whose only child is
+      // `package/`, then tar that. Equivalent to tools/pack-dist.mjs, kept here so a
+      // deployment does not need the development tooling.
+      const root = resolve(args.dir ?? '.')
+      const pkgPath = join(root, 'package.json')
+      if (!existsSync(pkgPath)) {
+        console.error(`没有 package.json：${pkgPath}`)
+        process.exit(1)
+      }
+      archive = packWithNpmRoot(root, JSON.parse(readFileSync(pkgPath, 'utf8')))
+    }
+    const meta = artifacts.stageMarketplacePackage(archive)
+    console.log(`${bold(meta.name)}  v${meta.version}`)
+    console.log(dim(`  sha256 ${meta.sha256}`))
+    console.log(dim(`  大小   ${meta.sizeBytes} B`))
+    console.log(dim(`  存放   ${artifacts.selfFile}`))
     db.close()
     break
   }

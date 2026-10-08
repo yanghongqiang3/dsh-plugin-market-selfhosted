@@ -28,7 +28,7 @@
  * (root-level `package.json`, no prefix), because `server/lib/pack.js` reads
  * `package.json` at the archive root. Keep the two apart — see `docs/distributing.md`.
  */
-import { mkdtempSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,8 +37,18 @@ import { packTarGz } from '../server/lib/pack.js'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
 
-/** Everything a client needs, and nothing that only matters while developing here. */
+/**
+ * Everything a client needs, and nothing that only matters while developing here.
+ *
+ * `INCLUDE_FILES` covers single files outside the main trees. `server/lib/version.js` is
+ * here because `lib/plugin.js` imports it: the semver comparison has to be the SAME code
+ * the service uses, since the client decides whether the service carries a newer copy of
+ * this plugin. Leaving it out produced a package that installed cleanly and then failed
+ * to import with MODULE_NOT_FOUND — caught by `tools/probe-package-import.mjs`, which
+ * imports the packaged copy the way the loader does.
+ */
 const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
+const INCLUDE_FILES = ['server/lib/version.js']
 const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
 
 /**
@@ -89,6 +99,13 @@ try {
       mkdirSync(dirname(to), { recursive: true })
       copyFileSync(from, to)
     }
+  }
+  for (const item of INCLUDE_FILES) {
+    const from = join(ROOT, item)
+    if (!existsSync(from)) throw new Error(`missing required file: ${item}`)
+    const to = join(inner, item)
+    mkdirSync(dirname(to), { recursive: true })
+    copyFileSync(from, to)
   }
 
   // Enumerate what actually landed in the staging tree, so the archive can never list

@@ -25,86 +25,20 @@ const NAME_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/
 export const ARTIFACT_STATES = ['draft', 'review', 'published', 'revoked']
 
 /**
- * Version ordering — `semver`, restricted to what this market needs.
- *
- * WHY THIS EXISTS AT ALL, and it is a bug fix rather than a nicety:
- *
- * "Latest" used to mean `ORDER BY published_at DESC` — MOST RECENTLY PUBLISHED. That is
- * not the same as the highest version, and the difference is a downgrade dressed as an
- * upgrade. Measured (`tools/probe-version-order.mjs`) by publishing 2.0.0, then 1.5.0,
- * then 1.0.0 — which is what happens when a hotfix is published from an older branch:
- *
- *     catalog reported 1.0.0
- *     an install at 2.0.0 was offered 「更新到 1.0.0」
- *     the unpinned download served 1.0.0
- *
- * The install page decides whether to show that button by comparing the catalog's
- * version with the installed one, so this ordering IS the update mechanism.
- *
- * A second defect lived in the same expression: the ordering took no notice of `state`,
- * so a REVOKED newest version was still reported as latest. `policy` refuses it
- * (`E_REVOKED`) — but by then the user has already been shown a button that cannot work.
- * Both are fixed by selecting over publishable versions only.
- *
- * Semver precedence, implemented per the spec's rules:
- *   numeric identifiers compare numerically, alphanumerics lexically, a release outranks
- *   any of its prereleases (1.0.0 > 1.0.0-rc.1), and a longer prerelease list outranks a
- *   shorter equal prefix (1.0.0-alpha.1 > 1.0.0-alpha). Build metadata carries no
- *   precedence and is ignored.
+ * Version ordering lives in `version.js` so the client plugin compares versions exactly
+ * the way the service does — the client decides whether the service carries a newer copy
+ * of the market plugin itself, and two implementations would eventually disagree.
+ * See that file for why ordering has to be done in JS at all.
  */
-const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+import { compareVersions, parseVersion } from './version.js'
 
-/** Parse into comparable parts, or `null` when the string is not a semantic version. */
-export function parseVersion(version) {
-  const match = VERSION_RE.exec(String(version ?? ''))
-  if (match === null) return null
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-    prerelease: match[4] === undefined ? [] : match[4].split('.'),
-  }
-}
-
-/** Compare two prerelease identifier lists; `[]` (a release) outranks any of them. */
-function comparePrerelease(a, b) {
-  if (a.length === 0 && b.length === 0) return 0
-  if (a.length === 0) return 1
-  if (b.length === 0) return -1
-  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
-    const left = a[i]
-    const right = b[i]
-    if (left === undefined) return -1
-    if (right === undefined) return 1
-    const leftNumeric = /^\d+$/.test(left)
-    const rightNumeric = /^\d+$/.test(right)
-    if (leftNumeric && rightNumeric) {
-      if (Number(left) !== Number(right)) return Number(left) < Number(right) ? -1 : 1
-      continue
-    }
-    // Numeric identifiers always have lower precedence than alphanumeric ones.
-    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
-    if (left !== right) return left < right ? -1 : 1
-  }
-  return 0
-}
-
-/** `-1` / `0` / `1` for highest-first sorting. Unparseable versions sort lowest. */
-export function compareVersions(a, b) {
-  const left = parseVersion(a)
-  const right = parseVersion(b)
-  if (left === null || right === null) {
-    if (left === null && right === null) return String(a).localeCompare(String(b))
-    return left === null ? -1 : 1
-  }
-  for (const key of ['major', 'minor', 'patch']) {
-    if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1
-  }
-  return comparePrerelease(left.prerelease, right.prerelease)
-}
+export { compareVersions, parseVersion }
 
 /** Only an artifact in this state may be installed (mirrors `policy.js`). */
 const PUBLISHABLE = 'published'
+
+/** The package name of the market's own client plugin. */
+export const MARKETPLACE_NAME = 'dsh-plugin-marketplace'
 
 
 export class Artifacts {
@@ -302,6 +236,79 @@ export class Artifacts {
       .all(name)
       .map(rowToArtifact)
       .sort((a, b) => compareVersions(a.version, b.version))
+  }
+
+  // ------------------------------------------------- the market's own package
+  //
+  // Kept OUT of the artifacts table on purpose. It is not market data: it is not
+  // governed by `policy`, it does not appear in the catalog, and it is not something a
+  // group is granted. It is the client that talks to this service, and mixing it into
+  // the catalog would let it be "installed" through a path whose format it cannot even
+  // use. One file on disk plus one small descriptor is the whole feature.
+
+  get selfDir() {
+    return this.contain('self')
+  }
+
+  get selfFile() {
+    return join(this.selfDir, 'marketplace.tgz')
+  }
+
+  get selfMetaFile() {
+    return join(this.selfDir, 'marketplace.json')
+  }
+
+  /**
+   * Stage the market plugin package this service will hand out.
+   *
+   * Validated before anything is written: a corrupt or mislabelled archive must never
+   * become the copy every client downloads, because a failed self-update on every
+   * machine at once is the worst possible failure mode here.
+   */
+  stageMarketplacePackage(archive) {
+    const inspection = inspectArchive(archive)
+    if (!inspection.ok) throw new ArchiveError(inspection.detail ?? inspection.code)
+    const pkg = inspection.pkg
+    if (pkg.name !== MARKETPLACE_NAME) {
+      throw new ArchiveError(`期望 ${MARKETPLACE_NAME}，归档声明的是 ${pkg.name}`)
+    }
+    if (parseVersion(pkg.version) === null) {
+      throw new ArchiveError(`version "${pkg.version}" is not a semantic version`)
+    }
+    mkdirSync(this.selfDir, { recursive: true })
+    writeFileSync(this.selfFile, archive)
+    const meta = {
+      name: pkg.name,
+      version: pkg.version,
+      sha256: sha256(archive),
+      sizeBytes: archive.length,
+      publishedAt: Date.now(),
+    }
+    writeFileSync(this.selfMetaFile, JSON.stringify(meta, null, 2))
+    return meta
+  }
+
+  /** The staged package's descriptor, or `null` when none has been staged. */
+  marketplacePackage() {
+    if (!existsSync(this.selfMetaFile) || !existsSync(this.selfFile)) return null
+    try {
+      const meta = JSON.parse(readFileSync(this.selfMetaFile, 'utf8'))
+      if (parseVersion(meta.version) === null) return null
+      return meta
+    } catch {
+      // A damaged descriptor means "no package", not a crash: the client falls back to
+      // running whatever it already has.
+      return null
+    }
+  }
+
+  /** The staged bytes, re-hashed so the service cannot hand out different content. */
+  marketplaceBytes() {
+    const meta = this.marketplacePackage()
+    if (meta === null) return null
+    const bytes = readFileSync(this.selfFile)
+    if (sha256(bytes) !== meta.sha256) return null
+    return bytes
   }
 
   setState(name, version, channel, state) {

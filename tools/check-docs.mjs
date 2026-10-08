@@ -121,6 +121,23 @@ for (const [label, condition] of claims) ok(label, condition)
     '打包工具排除了 web/console.*',
     /EXCLUDE\s*=\s*new Set\(\['web\/console\.html',\s*'web\/console\.css'\]\)/.test(packer),
   )
+  /**
+   * And it must ship every file the plugin imports.
+   *
+   * A packer that omits a dependency produces an archive that installs cleanly and then
+   * fails to import — invisible to every other test, because they load the repository
+   * copy where the file obviously exists. It happened: adding a shared semver module made
+   * `lib/plugin.js` import `../server/lib/version.js` and the packer did not carry it.
+   * `tools/probe-package-import.mjs` is the executable form of this check.
+   */
+  ok(
+    '打包工具包含 lib/plugin.js 依赖的 server/lib/version.js',
+    /INCLUDE_FILES\s*=\s*\['server\/lib\/version\.js'\]/.test(packer),
+  )
+  ok(
+    'CLI 的打包器也包含同一个依赖',
+    existsSync('server/cli.mjs') && readFileSync('server/cli.mjs', 'utf8').includes("INCLUDE_FILES = ['server/lib/version.js']"),
+  )
 }
 
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')

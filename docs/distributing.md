@@ -196,16 +196,35 @@ dsh plugin --profile <profile> remove dsh-plugin-marketplace
 | `tools/pack-dist.mjs` 产出的 | **给 DSH 装这个插件本身** | 全部在 `package/` 下 | `package/package.json` |
 | `server/lib/pack.js` 产出的 | 市场登记的**制品**（别人要装的插件） | 扁平 | 归档根 `package.json` |
 
-market 的制品格式是扁平的，因为 `inspectArchive` 是**在归档根**读 `package.json`。
-这意味着**市场制品格式不支持子目录**——一个带 `lib/` 的插件包打成扁平归档后，
-结构会丢失。我的客户端也是这样（`lib/` + `web/`），所以**当前不能靠市场来分发它自己**。
+market 的制品格式以**扁平**为准，但 `inspectArchive` **现在也接受 npm 布局**
+（全部条目在 `package/` 下），并把前缀归一到读取视图里。两件事因此同时成立：
 
-要修的话，得让 `inspectArchive` 接受并规范化 `package/` 前缀，同时让 `paths.js`/
-`lib/tar.js` 的解包保持目录结构。这是一处已知限制，写在这里免得下次又踩。
+- 上传一个用 `npm pack` 打出来的包不再被 `E_NOT_PACKAGE` 拒绝；
+- 子目录不会再丢——`package/lib/plugin.js` 报告为 `lib/plugin.js`，就是安装后该在的位置。
+
+> 这条曾经是一处**已知限制**：市场完全无法分发带子目录的包。现在没有了。
+> 布局由归档自己决定，两种混用时按「不明确」拒绝，而不是猜。
 
 ---
 
-## 8. 哪些改动要重打包，哪些不要
+## 8. 这个插件现在会自己更新（§5 的替代路径）
+
+从这一版起，客户端**启动时会问服务端要包**，不同就自动换上，下次启动生效。
+所以日常不再需要分发 tgz：
+
+```bash
+# 部署机：改完 version、打好包之后
+node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.1.tgz
+```
+
+§5 那套手工 `dsh plugin add` 仍然有效（也是新机器的**首次**安装方式），
+但升级路径已经不需要它了。机制、硬约束（必须重启）、以及为什么拒绝链接安装，见 README §0.4。
+
+**首次安装仍然要手工做**，因为那时客户端还没有这个插件，自然也没人去问服务端。
+
+---
+
+## 9. 哪些改动要重打包，哪些不要
 
 **问过的问题**：「控制台不是和服务端在一起吗？为什么改控制台要重打包插件？」
 
@@ -229,7 +248,7 @@ market 的制品格式是扁平的，因为 `inspectArchive` 是**在归档根**
 
 ---
 
-## 9. 检查清单
+## 10. 检查清单
 
 **开发机（一次）**
 

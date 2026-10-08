@@ -97,10 +97,31 @@ export function unpackToMap(buffer) {
  * Sanity-check an uploaded archive without touching the filesystem: it must be a
  * readable tar.gz whose `package.json` is valid JSON with a name and version, and
  * no entry may escape the archive root.
+ *
+ * TWO LAYOUTS ARE ACCEPTED, and the difference is not cosmetic:
+ *
+ *   flat          `package.json` at the archive root
+ *   npm layout    everything under `package/`, i.e. `package/package.json`
+ *
+ * The market stores FLAT archives and that stays the canonical form. The npm layout is
+ * accepted because it is what `npm pack` and pnpm produce, and it is the only layout
+ * pnpm will INSTALL correctly — measured both ways: a flat archive installs as a flat
+ * package (`lib/plugin.js` becomes `plugin.js`), `exports` then point at files that do
+ * not exist, and both loader rows fail with `failed to import`.
+ *
+ * The prefix is normalised away here so nothing downstream has to know about it, and the
+ * `files` list reports paths as the caller's own layout used them — an archive
+ * containing `package/lib/plugin.js` reports `lib/plugin.js`, because that is where the
+ * file belongs once installed.
+ *
+ * This also lifts a documented limitation: the market could not distribute a package
+ * with subdirectories at all, because `inspectArchive` insisted on a root-level
+ * `package.json` and rejected anything else with E_NOT_PACKAGE. See §7 of
+ * docs/distributing.md.
  */
 export function inspectArchive(buffer) {
-  const files = readTarGz(buffer)
-  for (const entry of files.keys()) {
+  const raw = readTarGz(buffer)
+  for (const entry of raw.keys()) {
     if (entry.startsWith('/') || /^[a-zA-Z]:/.test(entry)) {
       return { ok: false, code: 'E_ABSOLUTE_PATH', detail: `归档条目为绝对路径：${entry}` }
     }
@@ -109,7 +130,32 @@ export function inspectArchive(buffer) {
       return { ok: false, code: 'E_PATH_ESCAPE', detail: `归档条目包含上级引用：${entry}` }
     }
   }
-  const pkgBytes = files.get('package.json') ?? files.get('./package.json')
+
+  // Decide the layout once, from the entries, then read everything through it.
+  const files = new Map()
+  for (const [name, value] of raw) {
+    const stripped = name.startsWith('./') ? name.slice(2) : name
+    if (stripped === 'package.json') files.set('package.json', value)
+    if (stripped === 'package/package.json') files.set('package/package.json', value)
+  }
+  const hasRootPkg = files.get('package.json') !== undefined
+  const hasNestedPkg = files.get('package/package.json') !== undefined
+  if (!hasRootPkg && !hasNestedPkg) {
+    return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档内没有 package.json' }
+  }
+  if (hasRootPkg && hasNestedPkg) {
+    return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档同时存在根级与 package/ 下的 package.json，布局不明确' }
+  }
+  const prefix = hasRootPkg ? '' : 'package/'
+
+  const files2 = new Map()
+  for (const [name, value] of raw) {
+    const stripped = name.startsWith('./') ? name.slice(2) : name
+    if (prefix !== '' && !stripped.startsWith(prefix)) continue
+    files2.set(prefix === '' ? stripped : stripped.slice(prefix.length), value)
+  }
+
+  const pkgBytes = files2.get('package.json')
   if (!pkgBytes) return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档内没有 package.json' }
 
   let pkg
@@ -122,7 +168,7 @@ export function inspectArchive(buffer) {
     return { ok: false, code: 'E_BAD_PACKAGE_JSON', detail: 'package.json 缺少 name 或 version' }
   }
 
-  const marketBytes = files.get('market.json') ?? files.get('./market.json')
+  const marketBytes = files2.get('market.json')
   let meta = {}
   if (marketBytes) {
     try {
@@ -134,12 +180,22 @@ export function inspectArchive(buffer) {
 
   const bundleDecl = pkg?.dsh?.bundle?.patch
   const requiresOwnFiles = [bundleDecl].flat().filter(Boolean)
-  for (const relative of requiresOwnFiles) {
-    if (!files.has(relative)) {
+  for (const declared of requiresOwnFiles) {
+    /**
+     * Normalise the declared path before looking it up.
+     *
+     * `dsh.bundle.patch` is conventionally written `./cordis.patch.yml`, but tar entries
+     * never carry the leading `./` — so a literal lookup failed on a perfectly good
+     * package. Found on this repository's own package.json, which declares exactly that:
+     * the market could not have accepted it. Both `./x` and `x` name the same file, and
+     * normalising is the standard reading of a package-relative path.
+     */
+    const relative = normalize(String(declared).replace(/^\.\//, ''))
+    if (!files2.has(relative)) {
       return {
         ok: false,
         code: 'E_BUNDLE_PATCH_MISSING',
-        detail: `声明 dsh.bundle.patch=${relative}，但归档内没有该文件`,
+        detail: `声明 dsh.bundle.patch=${declared}，但归档内没有该文件`,
       }
     }
   }
@@ -148,7 +204,9 @@ export function inspectArchive(buffer) {
     ok: true,
     pkg,
     meta,
-    files: [...files.keys()].filter((name) => files.get(name) !== null),
+    // `packagePrefix` lets a caller re-pack or extract with the original layout.
+    packagePrefix: prefix,
+    files: [...files2.keys()].filter((name) => files2.get(name) !== null),
     bytes: buffer.length,
   }
 }

@@ -604,6 +604,56 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     })
   }, { auth: 'none' })
 
+  // ------------------------------------------------------- the plugin's own copy
+  //
+  // The client plugin auto-updates from HERE rather than from the market catalog.
+  //
+  // Two reasons. First, the market's artifact format is flat while an installable npm
+  // tarball must keep everything under `package/` — the market cannot distribute this
+  // plugin through the same path it distributes others (§7 of docs/distributing.md).
+  // Second, the service and the plugin are deployed together: whoever updates the
+  // service has the new package in hand, so the service is the natural place to carry it
+  // and no separate distribution channel has to be maintained.
+  //
+  // Distinct paths from /catalog on purpose, so a client cannot confuse the plugin it
+  // runs with a plugin it may install.
+
+  /** What package this service carries, so a client can decide whether to update. */
+  route('GET', '/dsh-market/self', (req, res) => {
+    const held = artifacts.marketplacePackage()
+    if (held === null) {
+      // Not an error: a service with no package staged simply cannot offer one, and the
+      // client must be able to tell that apart from a failure.
+      json(res, 200, { ok: true, available: false })
+      return
+    }
+    json(res, 200, {
+      ok: true,
+      available: true,
+      name: held.name,
+      version: held.version,
+      sha256: held.sha256,
+      sizeBytes: held.sizeBytes,
+      publishedAt: held.publishedAt,
+    })
+  }, { auth: 'none' })
+
+  /** The bytes. Unauthenticated for the same reason `/self` is: it is not market data. */
+  route('GET', '/dsh-market/self/download', (req, res) => {
+    const bytes = artifacts.marketplaceBytes()
+    if (bytes === null) {
+      json(res, 404, { ok: false, code: 'E_NO_SELF_PACKAGE' })
+      return
+    }
+    res.writeHead(200, {
+      'content-type': 'application/gzip',
+      'content-length': bytes.length,
+      'x-artifact-sha256': sha256(bytes),
+      'cache-control': 'no-store',
+    })
+    res.end(bytes)
+  }, { auth: 'none' })
+
   // ------------------------------------------------------------ console pages
   //
   // Served here, not through DSH: administration must be reachable with a browser
