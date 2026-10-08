@@ -7,12 +7,32 @@
  * re-hashed before it leaves.
  */
 import { createServer } from 'node:http'
+import { readFileSync, existsSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { evaluate, statusFor } from './policy.js'
 import { ArchiveError, inspectArchive, sha256 } from './pack.js'
 
 const MAX_JSON_BYTES = 64 * 1024
 /** Artifact uploads are binary and legitimately large; JSON stays tightly capped. */
 const DEFAULT_MAX_UPLOAD_BYTES = Number(process.env.MARKET_MAX_UPLOAD_BYTES ?? 64 * 1024 * 1024)
+
+/**
+ * Static files for the server console.
+ *
+ * The console is reached by URL and served by THIS service — deliberately not
+ * embedded in DSH. Administration is a server-side job, so it does not need the
+ * DSH shell, its host plugin, or a local profile. `market.css` and `shared.js` are
+ * the very same files the DSH-hosted install page uses, so the two surfaces cannot
+ * drift apart visually or in their auth plumbing.
+ */
+const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'web')
+const STATIC_FILES = new Map([
+  ['/console', ['console.html', 'text/html; charset=utf-8']],
+  ['/dsh-market/assets/market.css', ['market.css', 'text/css; charset=utf-8']],
+  ['/dsh-market/assets/console.css', ['console.css', 'text/css; charset=utf-8']],
+  ['/dsh-market/assets/shared.js', ['shared.js', 'text/javascript; charset=utf-8']],
+])
 
 export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES }) {
   const routes = []
@@ -38,6 +58,23 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       'cache-control': 'no-store',
     })
     res.end(text)
+  }
+
+  /** Serve one of the console's static files, or 404 with a plain body. */
+  const staticFile = (res, file, type) => {
+    const full = join(WEB_DIR, file)
+    if (!existsSync(full)) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+      res.end(`missing asset: ${file}`)
+      return
+    }
+    const bytes = readFileSync(full)
+    res.writeHead(200, {
+      'content-type': type,
+      'content-length': bytes.length,
+      'cache-control': 'no-store',
+    })
+    res.end(bytes)
   }
 
   /** Collect the request body as raw bytes, refusing anything over `limit`. */
@@ -609,6 +646,25 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       time: Date.now(),
     })
   }, { auth: 'none' })
+
+  // ------------------------------------------------------------ console pages
+  //
+  // Served here, not through DSH: administration must be reachable with a browser
+  // and a URL, independent of any DSH install, and it is not something a plugin
+  // client should be able to reach into. The DSH page is the install catalog only.
+
+  route('GET', '/', (req, res) => {
+    json(res, 200, {
+      ok: true,
+      service: 'dsh-plugin-marketplace-service',
+      console: '/console',
+      entry: '在 DSH 内点击左侧栏底部的「内部插件市场」安装与卸载插件；账号、权限、发布在本控制台。',
+    })
+  }, { auth: 'none' })
+
+  for (const [path, [file, type]] of STATIC_FILES) {
+    route('GET', path, (_req, res) => staticFile(res, file, type), { auth: 'none' })
+  }
 
   // ----------------------------------------------------------------- dispatch
 

@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>内部插件市场 · 服务端控制台</title>
+<!--
+  The server console. Reached by URL, not through DSH.
+
+  Administration is a different job from installing: accounts, groups, plugin rules,
+  publishing and artifact state all live here, and none of it is wired into the DSH
+  entry. The DSH page shows a catalog with 安装 / 卸载 and nothing else.
+
+  Because it is not rendered inside DSH, it needs no hook to the host plugin: it
+  talks to the market service directly, and its assets are served by that same
+  service.
+-->
+<link rel="stylesheet" href="/dsh-market/assets/market.css" />
+<link rel="stylesheet" href="/dsh-market/assets/console.css" />
+</head>
+<body>
+<div class="chromebar" aria-hidden="true"></div>
+<div class="chromebar-controls" aria-hidden="true"></div>
+<header>
+  <h1>服务端控制台</h1>
+  <span class="who" id="who"></span>
+  <button class="btn hidden" id="refresh">刷新</button>
+  <button class="btn hidden" id="logout">退出</button>
+</header>
+
+<main class="wrap">
+  <section id="view-noService" class="auth hidden">
+    <h2>服务端未就绪</h2>
+    <div class="hint">这个页面由市场服务端自己提供，正常情况下不会看到它。</div>
+    <button class="btn" id="noService-retry">重新检测</button>
+  </section>
+
+  <section id="view-login" class="auth hidden">
+    <h2>管理员登录</h2>
+    <div class="hint">控制台只对管理员开放。非管理员账号可以登录 DSH 客户端安装插件，但进不来这里。</div>
+    <label>用户名<input type="text" id="login-user" autocomplete="username" /></label>
+    <label>密码<input type="password" id="login-pass" autocomplete="current-password" /></label>
+    <button class="btn btn-primary" id="login-submit">登录</button>
+    <div class="err" id="login-err"></div>
+    <div class="hint" id="login-service"></div>
+  </section>
+
+  <section id="view-password" class="auth hidden">
+    <h2>设置新密码</h2>
+    <div class="hint">首次登录（或管理员重置后）的强制步骤。至少 12 位。</div>
+    <label>新密码<input type="password" id="pw-next" autocomplete="new-password" /></label>
+    <label>确认新密码<input type="password" id="pw-next2" autocomplete="new-password" /></label>
+    <button class="btn btn-primary" id="pw-submit">设置并继续</button>
+    <div class="err" id="pw-err"></div>
+  </section>
+
+  <section id="view-denied" class="auth hidden">
+    <h2>需要管理员权限</h2>
+    <div class="hint" id="denied-who"></div>
+    <div class="hint">
+      账号与权限只能由管理员在这里配置。请在服务端用 CLI 把自己提升为管理员：<br />
+      <code>node server/cli.mjs grant:add --user &lt;你的用户名&gt; --pattern '*' --effect allow</code><br />
+      或建一个管理员账号：<code>node server/cli.mjs user:add --username admin --admin</code>
+    </div>
+    <button class="btn" id="denied-logout">退出登录</button>
+  </section>
+
+  <section id="view-console" class="hidden">
+    <nav class="side" id="nav">
+      <button class="btn navbtn on" data-panel="users">账号</button>
+      <button class="btn navbtn" data-panel="groups">权限组</button>
+      <button class="btn navbtn" data-panel="grants">组 → 插件规则</button>
+      <button class="btn navbtn" data-panel="publish">发布插件</button>
+      <button class="btn navbtn" data-panel="artifacts">制品</button>
+    </nav>
+
+    <div class="panes">
+      <!-- 账号 -->
+      <section class="pane" id="pane-users">
+        <div class="note">
+          权限模型：<code>用户 → 组 → 插件规则</code>。规则用 glob（如
+          <code>@dsh-internal/dsh-plugin-*</code>）。<strong>默认拒绝</strong>：没有任何规则授予就不能安装；
+          命中 <code>deny</code> 时 deny 优先。这些判定全部在服务端，客户端页面改不了。
+        </div>
+        <div class="panel-row">
+          <section class="panel">
+            <h2>账号<span class="meta" id="users-count"></span></h2>
+            <div class="table" id="users-table"></div>
+          </section>
+          <section class="panel">
+            <h2>新建账号</h2>
+            <div class="form">
+              <input type="text" id="nu-name" placeholder="用户名（内部工号/英文名）" />
+              <input type="text" id="nu-display" placeholder="显示名（可选）" />
+              <input type="password" id="nu-pass" placeholder="初始密码（首登强制修改）" />
+              <label class="checkbox"><input type="checkbox" id="nu-admin" /> 管理员角色</label>
+              <div class="chips" id="nu-groups"></div>
+              <button class="btn btn-primary" id="nu-submit">创建账号</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- 权限组 -->
+      <section class="pane hidden" id="pane-groups">
+        <div class="panel-row">
+          <section class="panel">
+            <h2>权限组</h2>
+            <div class="table" id="groups-table"></div>
+          </section>
+          <section class="panel">
+            <h2>新建组</h2>
+            <div class="form">
+              <input type="text" id="ng-id" placeholder="组 ID（英文，如 billing）" />
+              <input type="text" id="ng-desc" placeholder="说明（可选）" />
+              <button class="btn btn-primary" id="ng-submit">创建组</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <!-- 组 → 规则 -->
+      <section class="pane hidden" id="pane-grants">
+        <div class="note">
+          规则按组授予。命中 <code>deny</code> 时 deny 优先，与注册顺序无关。
+          <code>channel</code> 留空表示适用全部通道。
+        </div>
+        <section class="panel">
+          <h2>已有规则</h2>
+          <div class="table" id="grants-table"></div>
+          <div class="form inline">
+            <select id="gr-group"></select>
+            <input type="text" id="gr-pattern" placeholder="插件匹配（glob），如 @dsh-internal/dsh-plugin-*" />
+            <select id="gr-effect">
+              <option value="allow">allow（授予）</option>
+              <option value="deny">deny（拒绝，优先）</option>
+            </select>
+            <select id="gr-channel">
+              <option value="">全部通道</option>
+              <option value="stable">仅 stable</option>
+              <option value="beta">仅 beta</option>
+            </select>
+            <button class="btn btn-primary" id="gr-submit">添加规则</button>
+          </div>
+        </section>
+      </section>
+
+      <!-- 发布 -->
+      <section class="pane hidden" id="pane-publish">
+        <div class="note">
+          上传 <code>.tar.gz</code>。默认<strong>只预检</strong>：服务端解析归档、读出
+          <code>package.json</code> 与市场元数据，告诉你它将会发布什么，不写入。
+          确认无误后再点「确认发布」。
+          <br />同样的操作也可以用 CLI：<code>node server/cli.mjs publish &lt;目录或归档&gt;</code>。
+        </div>
+        <section class="panel">
+          <h2>选择归档</h2>
+          <div class="form">
+            <input type="file" id="pub-file" accept=".tar.gz,.tgz,application/gzip" />
+            <div class="form-row">
+              <label class="field">通道
+                <select id="pub-channel">
+                  <option value="">按归档声明</option>
+                  <option value="stable">stable</option>
+                  <option value="beta">beta</option>
+                </select>
+              </label>
+              <label class="field">状态
+                <select id="pub-state">
+                  <option value="">按归档声明</option>
+                  <option value="draft">draft（草稿）</option>
+                  <option value="review">review（待审）</option>
+                  <option value="published">published（已发布）</option>
+                  <option value="revoked">revoked（已撤回）</option>
+                </select>
+              </label>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="pub-check">预检</button>
+              <button class="btn" id="pub-commit" disabled>确认发布</button>
+            </div>
+            <div class="err" id="pub-err"></div>
+          </div>
+          <pre class="preview hidden" id="pub-preview"></pre>
+        </section>
+      </section>
+
+      <!-- 制品 -->
+      <section class="pane hidden" id="pane-artifacts">
+        <div class="note">
+          改变制品状态会影响所有能安装它的人：<code>revoked</code> 后即使有权限也下载不到
+          （服务端在 <code>download</code> 会再判一次，一个字节都不发）。
+        </div>
+        <section class="panel">
+          <h2>已登记制品</h2>
+          <div class="table" id="artifacts-table"></div>
+        </section>
+      </section>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+</main>
+
+<script src="/dsh-market/assets/shared.js"></script>
+<script>
+const S = globalThis.MarketShell
+const { $, state, service, show, status, setWho, chip, trow, miniButton } = S
+
+let users = []
+let groups = []
+let grants = []
+let artifacts = []
+/** Set by a successful dry run; 确认发布 reuses the exact bytes and options. */
+let pendingPublish = null
+
+// ------------------------------------------------------------------- 导航
+
+function showPane(name) {
+  for (const button of document.querySelectorAll('.navbtn')) {
+    button.classList.toggle('on', button.dataset.panel === name)
+  }
+  for (const pane of document.querySelectorAll('.pane')) {
+    pane.classList.toggle('hidden', pane.id !== `pane-${name}`)
+  }
+}
+
+// ------------------------------------------------------------------- 账号
+
+async function loadAdmin() {
+  const [u, g, gr] = await Promise.all([
+    service('/dsh-market/admin/users'),
+    service('/dsh-market/admin/groups'),
+    service('/dsh-market/admin/grants'),
+  ])
+  users = u.body?.users ?? []
+  groups = g.body?.groups ?? []
+  grants = gr.body?.grants ?? []
+  renderUsers()
+  renderGroups()
+  renderGrants()
+}
+
+function renderUsers() {
+  const table = $('users-table')
+  table.textContent = ''
+  $('users-count').textContent = `　${users.length} 个`
+  if (users.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '还没有账号。用右侧表单或 CLI 创建第一个。'
+    table.appendChild(empty)
+  }
+  for (const user of users) {
+    const action = miniButton(user.disabled ? '启用' : '停用', async () => {
+      const result = await service('/dsh-market/admin/status', {
+        method: 'POST', body: { username: user.username, disabled: !user.disabled },
+      })
+      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+      status(`${user.username} 已${user.disabled ? '启用' : '停用'}。`)
+      await loadAdmin()
+    })
+    const reset = miniButton('重置密码', async () => {
+      const next = prompt(`为 ${user.username} 设置新密码（至少 12 位）`)
+      if (!next) return
+      const result = await service('/dsh-market/admin/password', {
+        method: 'POST', body: { username: user.username, newPassword: next },
+      })
+      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+      status(`${user.username} 的密码已重置，下次登录会被要求改密。`)
+      await loadAdmin()
+    })
+    const role = miniButton(user.isAdmin ? '取消管理员' : '设为管理员', async () => {
+      const result = await service('/dsh-market/admin/role', {
+        method: 'POST', body: { username: user.username, isAdmin: !user.isAdmin },
+      })
+      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+      status(`${user.username} 管理员角色已${user.isAdmin ? '取消' : '授予'}。`)
+      await loadAdmin()
+    })
+    const memberships = groups.map((group) => chip(
+      group.id,
+      (user.groups ?? []).includes(group.id),
+      async () => {
+        const joined = (user.groups ?? []).includes(group.id)
+        const result = await service('/dsh-market/admin/membership', {
+          method: 'POST',
+          body: { username: user.username, groupId: group.id, member: !joined },
+        })
+        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+        await loadAdmin()
+      },
+    ))
+
+    const row = trow([
+      [user.username],
+      [user.displayName ?? '—'],
+      [user.isAdmin ? '管理员' : '普通', user.isAdmin ? 'ok' : ''],
+      [user.disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), user.disabled ? 'bad' : ''],
+    ])
+    const actions = document.createElement('div')
+    actions.className = 'cell-actions'
+    for (const button of [reset, role, action]) actions.appendChild(button)
+    row.appendChild(actions)
+    table.appendChild(row)
+
+    if (groups.length > 0) {
+      const groupsRow = document.createElement('div')
+      groupsRow.className = 'tr sub'
+      const label = document.createElement('div')
+      label.className = 'grow'
+      label.textContent = '权限组'
+      groupsRow.appendChild(label)
+      const chips = document.createElement('div')
+      chips.className = 'chips'
+      for (const c of memberships) chips.appendChild(c)
+      groupsRow.appendChild(chips)
+      table.appendChild(groupsRow)
+    }
+  }
+}
+
+function renderNewUserGroups() {
+  const box = $('nu-groups')
+  box.textContent = ''
+  if (groups.length === 0) {
+    const hint = document.createElement('span')
+    hint.className = 'meta'
+    hint.textContent = '还没有权限组，可先创建后再分配。'
+    box.appendChild(hint)
+    return
+  }
+  for (const group of groups) {
+    box.appendChild(chip(group.id, false, function toggle() {
+      const on = this.classList.toggle('on')
+      this.dataset.on = on ? '1' : ''
+    }))
+  }
+}
+
+// ------------------------------------------------------------------- 权限组
+
+function renderGroups() {
+  const table = $('groups-table')
+  table.textContent = ''
+  if (groups.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '还没有权限组。'
+    table.appendChild(empty)
+  }
+  for (const group of groups) {
+    const members = users.filter((user) => (user.groups ?? []).includes(group.id)).map((user) => user.username)
+    const rules = grants.filter((grant) => grant.groupId === group.id).length
+    table.appendChild(trow([
+      [group.id],
+      [group.description ?? '—'],
+      [`${members.length} 人`, ''],
+      [`${rules} 条规则`, ''],
+    ]))
+  }
+  renderNewUserGroups()
+}
+
+// ------------------------------------------------------------------- 规则
+
+function renderGrants() {
+  const table = $('grants-table')
+  table.textContent = ''
+  const select = $('gr-group')
+  const previous = select.value
+  select.textContent = ''
+  for (const group of groups) {
+    const option = document.createElement('option')
+    option.value = group.id
+    option.textContent = group.id
+    select.appendChild(option)
+  }
+  if (groups.some((group) => group.id === previous)) select.value = previous
+
+  if (grants.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '还没有规则。没有规则就意味着默认拒绝：谁都装不了任何插件。'
+    table.appendChild(empty)
+    return
+  }
+  for (const grant of grants) {
+    const row = trow([
+      [grant.groupId],
+      [grant.pattern],
+      [grant.effect, grant.effect === 'deny' ? 'bad' : 'ok'],
+      [grant.channel || '全部通道', ''],
+    ])
+    const actions = document.createElement('div')
+    actions.className = 'cell-actions'
+    actions.appendChild(miniButton('删除', async () => {
+      const result = await service('/dsh-market/admin/grants', {
+        method: 'POST',
+        body: { action: 'remove', groupId: grant.groupId, pattern: grant.pattern, channel: grant.channel ?? '' },
+      })
+      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+      status('规则已删除。')
+      await loadAdmin()
+    }, true))
+    row.appendChild(actions)
+    table.appendChild(row)
+  }
+}
+
+// ------------------------------------------------------------------- 发布
+
+function publishOptions() {
+  const channel = $('pub-channel').value
+  const state = $('pub-state').value
+  const query = new URLSearchParams()
+  if (channel) query.set('channel', channel)
+  if (state) query.set('state', state)
+  return query
+}
+
+/**
+ * Upload the archive as raw bytes.
+ *
+ * The service route declares `{ auth: 'none', binary: true }` and reads the body
+ * itself, so this must NOT go through the JSON helper in shared.js — it sends the
+ * File object directly.
+ */
+async function uploadArchive(commit) {
+  const file = $('pub-file').files[0]
+  if (!file) { $('pub-err').textContent = '请先选择 .tar.gz 归档'; return null }
+  const query = publishOptions()
+  if (commit) query.set('commit', '1')
+  const response = await fetch(`/dsh-market/publish?${query.toString()}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/gzip',
+      authorization: `Bearer ${S.token.get()}`,
+    },
+    body: file,
+  })
+  const body = await response.json().catch(() => null)
+  return { ok: response.ok, status: response.status, body }
+}
+
+async function doCheck() {
+  $('pub-err').textContent = ''
+  $('pub-preview').classList.add('hidden')
+  $('pub-commit').disabled = true
+  pendingPublish = null
+  const result = await uploadArchive(false)
+  if (result === null) return
+  if (!result.ok) {
+    $('pub-err').textContent = result.body?.detail || result.body?.code || `预检失败（HTTP ${result.status}）`
+    return
+  }
+  pendingPublish = result.body?.wouldPublish ?? null
+  $('pub-preview').textContent = JSON.stringify(result.body, null, 2)
+  $('pub-preview').classList.remove('hidden')
+  $('pub-commit').disabled = false
+  status('预检通过。确认无误后点「确认发布」。')
+}
+
+async function doCommit() {
+  $('pub-err').textContent = ''
+  const result = await uploadArchive(true)
+  if (result === null) return
+  if (!result.ok) {
+    $('pub-err').textContent = result.body?.detail || result.body?.code || `发布失败（HTTP ${result.status}）`
+    return
+  }
+  status(`已发布 ${result.body?.artifact?.name} ${result.body?.artifact?.version}。`)
+  $('pub-commit').disabled = true
+  pendingPublish = null
+  await loadArtifacts()
+  showPane('artifacts')
+}
+
+// ------------------------------------------------------------------- 制品
+
+async function loadArtifacts() {
+  const result = await service('/dsh-market/admin/artifacts')
+  artifacts = result.body?.artifacts ?? []
+  renderArtifacts()
+}
+
+function renderArtifacts() {
+  const table = $('artifacts-table')
+  table.textContent = ''
+  if (artifacts.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '还没有已登记的制品。'
+    table.appendChild(empty)
+    return
+  }
+  const states = ['draft', 'review', 'published', 'revoked']
+  for (const artifact of artifacts) {
+    const row = trow([
+      [artifact.name],
+      [artifact.version],
+      [artifact.channel],
+      [artifact.state, artifact.state === 'published' ? 'ok' : (artifact.state === 'revoked' ? 'bad' : '')],
+      [`${artifact.sizeBytes ?? 0} B`, ''],
+    ])
+    const actions = document.createElement('div')
+    actions.className = 'cell-actions'
+    for (const next of states) {
+      if (next === artifact.state) continue
+      actions.appendChild(miniButton(`→ ${next}`, async () => {
+        const result = await service('/dsh-market/admin/artifacts/state', {
+          method: 'POST',
+          body: { name: artifact.name, version: artifact.version, channel: artifact.channel, state: next },
+        })
+        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+        status(`${artifact.name}@${artifact.version} 状态改为 ${next}。`)
+        await loadArtifacts()
+      }, next === 'revoked'))
+    }
+    row.appendChild(actions)
+    table.appendChild(row)
+  }
+}
+
+// ------------------------------------------------------------------- 装配
+
+S.onAuthenticated(async () => {
+  setWho(state.me?.displayName ?? state.me?.username ?? '')
+  $('login-service').textContent = state.serviceUrl ?? location.origin
+  if (!state.isAdmin) {
+    $('denied-who').textContent = `当前账号：${state.me?.username ?? '(未知)'}（非管理员）`
+    show('denied')
+    return
+  }
+  $('refresh').classList.remove('hidden')
+  $('logout').classList.remove('hidden')
+  await loadAdmin()
+  await loadArtifacts()
+  show('console')
+})
+
+$('login-submit').addEventListener('click', S.doLogin)
+$('login-pass').addEventListener('keydown', (event) => { if (event.key === 'Enter') S.doLogin() })
+$('pw-submit').addEventListener('click', S.doChangePassword)
+$('logout').addEventListener('click', S.doLogout)
+$('denied-logout').addEventListener('click', S.doLogout)
+$('noService-retry').addEventListener('click', () => location.reload())
+$('refresh').addEventListener('click', async () => {
+  status('')
+  await loadAdmin()
+  await loadArtifacts()
+})
+for (const button of document.querySelectorAll('.navbtn')) {
+  button.addEventListener('click', () => showPane(button.dataset.panel))
+}
+$('pub-file').addEventListener('change', () => {
+  $('pub-commit').disabled = true
+  $('pub-preview').classList.add('hidden')
+  pendingPublish = null
+})
+$('pub-check').addEventListener('click', doCheck)
+$('pub-commit').addEventListener('click', doCommit)
+
+$('nu-submit').addEventListener('click', async () => {
+  const username = $('nu-name').value.trim()
+  const password = $('nu-pass').value
+  if (!username || !password) { status('用户名与初始密码都要填。', true); return }
+  const selected = [...document.querySelectorAll('#nu-groups .chip.on')].map((el) => el.textContent)
+  const result = await service('/dsh-market/admin/users', {
+    method: 'POST',
+    body: {
+      username,
+      password,
+      displayName: $('nu-display').value.trim() || undefined,
+      isAdmin: $('nu-admin').checked,
+      groups: selected,
+    },
+  })
+  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+  status(`账号 ${username} 已创建。`)
+  $('nu-name').value = $('nu-display').value = $('nu-pass').value = ''
+  $('nu-admin').checked = false
+  await loadAdmin()
+})
+
+$('ng-submit').addEventListener('click', async () => {
+  const id = $('ng-id').value.trim()
+  if (!id) { status('组 ID 必填。', true); return }
+  const result = await service('/dsh-market/admin/groups', {
+    method: 'POST', body: { id, description: $('ng-desc').value.trim() || undefined },
+  })
+  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+  status(`组 ${id} 已创建。`)
+  $('ng-id').value = $('ng-desc').value = ''
+  await loadAdmin()
+})
+
+$('gr-submit').addEventListener('click', async () => {
+  const groupId = $('gr-group').value
+  const pattern = $('gr-pattern').value.trim()
+  if (!groupId || !pattern) { status('要选组并填插件匹配。', true); return }
+  const result = await service('/dsh-market/admin/grants', {
+    method: 'POST',
+    body: {
+      action: 'add',
+      groupId,
+      pattern,
+      effect: $('gr-effect').value,
+      channel: $('gr-channel').value || undefined,
+    },
+  })
+  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+  status('规则已添加。')
+  $('gr-pattern').value = ''
+  await loadAdmin()
+})
+
+S.init({
+  views: ['noService', 'login', 'password', 'denied', 'console'],
+  onView: (view) => {
+    const signedIn = view === 'console' || view === 'denied'
+    $('refresh').classList.toggle('hidden', !signedIn)
+    $('logout').classList.toggle('hidden', !signedIn)
+  },
+})
+</script>
+</body>
+</html>

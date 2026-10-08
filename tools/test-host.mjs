@@ -60,6 +60,56 @@ ok('注册了路由', registered.length > 0, `${registered.length} 条`)
 for (const route of registered) console.log(`      ${String(route.kind).padEnd(7)} ${route.path}`)
 ok('包含 /dsh-market/open（客户端半边取地址用）', registered.some((r) => String(r.path).includes('/dsh-market/open')))
 
+/**
+ * The asset route, driven exactly the way the webserver drives a handler.
+ *
+ * The webserver calls `route.handler(req, res)` — TWO arguments, no parsed URL. A
+ * handler that takes a third `url` parameter gets `undefined`, throws on
+ * `url.pathname`, and the webserver answers a bare 400 with no body and no visible
+ * log. That is what happened here, and only a real DSH instance exposed it: this
+ * test previously passed while the route was broken, because it never invoked a
+ * handler. So invoke one, with the real arity.
+ */
+{
+  const assetRoute = registered.find((r) => String(r.path) === '/dsh-market/assets')
+  ok('资源路由以 /dsh-market/assets 注册（前缀不能带尾斜杠）', assetRoute !== undefined)
+
+  if (assetRoute !== undefined) {
+    const responses = []
+    const fakeRes = () => {
+      const record = { status: 0, headers: null, body: null }
+      responses.push(record)
+      return {
+        writeHead: (status, headers) => { record.status = status; record.headers = headers ?? null },
+        end: (body) => { record.body = body ?? null },
+      }
+    }
+    const fakeReq = (path) => ({ method: 'GET', url: path, headers: {} })
+
+    // Two arguments only, matching the webserver.
+    await assetRoute.handler(fakeReq('/dsh-market/assets/shared.js'), fakeRes())
+    ok(
+      'shared.js 以两个参数调用时返回 200',
+      responses[0]?.status === 200,
+      `status=${responses[0]?.status} type=${responses[0]?.headers?.['content-type']}`,
+    )
+    ok('shared.js 带正确的 content-type', String(responses[0]?.headers?.['content-type'] ?? '').includes('javascript'))
+
+    await assetRoute.handler(fakeReq('/dsh-market/assets/market.css'), fakeRes())
+    ok('market.css 返回 200', responses[1]?.status === 200, `status=${responses[1]?.status}`)
+
+    // console.* belongs to the server console, which serves it from its own origin.
+    await assetRoute.handler(fakeReq('/dsh-market/assets/console.css'), fakeRes())
+    ok('console.css 不在本机白名单内（由服务端提供）', responses[2]?.status === 404, `status=${responses[2]?.status}`)
+
+    await assetRoute.handler(fakeReq('/dsh-market/assets/../../server/index.mjs'), fakeRes())
+    ok('资源路由不接受路径穿越', responses[3]?.status === 404, `status=${responses[3]?.status}`)
+
+    await assetRoute.handler(fakeReq('/dsh-market/assets/%2e%2e%2fserver%2findex.mjs'), fakeRes())
+    ok('资源路由不接受编码过的路径穿越', responses[4]?.status === 404, `status=${responses[4]?.status}`)
+  }
+}
+
 // A composition without webServer must stay inert instead of throwing.
 try {
   pluginMod.apply({ get: () => undefined, effect: (fn) => { fn(); return () => {} } })

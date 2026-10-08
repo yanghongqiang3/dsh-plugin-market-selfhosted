@@ -61,6 +61,38 @@ ok('首次启动创建了初始管理员', store.countUsers() === 1, `users=${st
 const health = await call('GET', '/dsh-market/health')
 ok('health 可用', health.status === 200 && health.body.ok === true)
 
+/**
+ * The two surfaces, and where administration is reachable.
+ *
+ * The console is served BY THIS SERVICE, at a URL, with no DSH involved: it must not
+ * need the host plugin, a local profile, or the shell. The root route reports where
+ * it is so the address is discoverable without reading the source.
+ */
+{
+  const root = await call('GET', '/')
+  ok('根路由报告控制台地址', root.status === 200 && root.body.console === '/console', root.body?.console)
+
+  const consolePage = await fetch(`${BASE}/console`)
+  const consoleHtml = await consolePage.text()
+  ok('GET /console 返回页面', consolePage.status === 200 && consoleHtml.includes('服务端控制台'))
+  ok('控制台不依赖 DSH 宿主插件', !consoleHtml.includes('/dsh-market/config'))
+  ok('控制台不含安装入口', !consoleHtml.includes('/dsh-market/install'))
+
+  for (const asset of ['market.css', 'console.css', 'shared.js']) {
+    const response = await fetch(`${BASE}/dsh-market/assets/${asset}`)
+    const text = await response.text()
+    ok(`静态资源 ${asset} 可达`, response.status === 200 && text.length > 0, `${text.length} B`)
+  }
+
+  // Static routes are unauthenticated on purpose: a login page that needs a token
+  // to load its own CSS cannot load.
+  const anonConsole = await fetch(`${BASE}/console`, { redirect: 'manual' })
+  ok('控制台页面无需令牌即可取回', anonConsole.status === 200, `status=${anonConsole.status}`)
+
+  const missing = await fetch(`${BASE}/dsh-market/assets/../../server/index.mjs`)
+  ok('静态路由不接受路径穿越', missing.status !== 200, `status=${missing.status}`)
+}
+
 const anon = await call('GET', '/dsh-market/catalog')
 ok('未登录访问目录 -> 401', anon.status === 401, `status=${anon.status} code=${anon.body?.code}`)
 

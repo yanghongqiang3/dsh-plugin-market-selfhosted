@@ -3,125 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>内部插件市场</title>
-<style>
-  :root{
-    --bg:#f6f7f9; --layer1:#fff; --layer2:#f0f1f4; --border1:#e6e8ec; --border2:#d4d8de;
-    --brand:#3b6ef5; --label:#1d2129; --label2:#707784;
-    --error:#d93026; --success:#12a05c; --warn:#c8791a;
-  }
-  @media (prefers-color-scheme: dark){
-    :root{
-      --bg:#1a1d21; --layer1:#22262b; --layer2:#2a2f35; --border1:#333941; --border2:#454c56;
-      --brand:#6f96ff; --label:#e8eaed; --label2:#9aa2ad;
-      --error:#ff6b5e; --success:#3fd68a; --warn:#e0a44a;
-    }
-  }
-  *{box-sizing:border-box}
-  /**
-   * Room for the desktop window controls.
-   *
-   * The Electron window is frameless (titleBarStyle: "hidden") and draws its
-   * minimise/maximise/close overlay ON TOP of the renderer — electron main sets
-   * `titleBarOverlay: { height: 40 }`. Anything rendered in the top 40px sits
-   * under those buttons, which is what happened to this page's title and its
-   * top-right buttons.
-   *
-   * Two rules matter, and the second one bit us:
-   *
-   *  1. reserve the strip, and keep the page's own header below it;
-   *  2. the drag region must NOT span the whole strip. The overlay buttons live
-   *     in the top-right (~138x40 on Windows). A drag region covering them
-   *     swallows their clicks — collapsing the whole DSH window instead of
-   *     clicking close. So dragging is limited to the strip minus that corner,
-   *     and the corner is explicitly left non-draggable.
-   *
-   * `--titlebar: 0` when the page is opened in a normal browser tab.
-   */
-  :root{--titlebar:0px;--window-controls:0px}
-  body.chrome{--titlebar:40px;--window-controls:180px}
-  body{margin:0;background:var(--bg);color:var(--label);padding-top:var(--titlebar);
-       font:13px/1.5 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
-  /* Draggable title-bar strip, stopping short of the window controls. */
-  .chromebar{position:fixed;top:0;left:0;right:var(--window-controls);height:var(--titlebar);
-             z-index:3;-webkit-app-region:drag}
-  /* The controls' corner: never draggable, and never intercepts the click. */
-  .chromebar-controls{position:fixed;top:0;right:0;width:var(--window-controls);height:var(--titlebar);
-                      z-index:4;-webkit-app-region:no-drag;pointer-events:none}
-  header{display:flex;gap:10px;align-items:center;padding:12px 18px;
-         border-bottom:1px solid var(--border1);background:var(--layer1);
-         position:sticky;top:var(--titlebar);z-index:2}
-  h1{margin:0;font-size:15px;font-weight:600;margin-right:auto}
-  .who{color:var(--label2);font-size:12px}
-  .btn{border:1px solid var(--border2);background:var(--layer1);color:var(--label);
-       border-radius:6px;padding:5px 11px;cursor:pointer;font-size:12px}
-  .btn:hover{background:var(--layer2)}
-  .btn[disabled]{opacity:.5;cursor:not-allowed}
-  .btn-primary{border-color:var(--brand);color:var(--brand)}
-  .btn-mini{padding:3px 8px;font-size:11px}
-  .btn-danger{border-color:var(--error);color:var(--error)}
-  .wrap{padding:16px 18px 40px;max-width:1180px}
-  .note{color:var(--label2);font-size:12px;line-height:1.65;border:1px dashed var(--border1);
-        border-radius:8px;padding:10px 12px;margin-bottom:14px;white-space:pre-wrap}
-  .note code{background:var(--layer2);padding:1px 5px;border-radius:4px}
-  .bar{display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
-  input[type=search],input[type=text],input[type=password]{
-       border:1px solid var(--border1);background:var(--layer1);color:var(--label);
-       border-radius:6px;padding:7px 10px;font-size:12.5px;width:100%}
-  select{border:1px solid var(--border1);background:var(--layer1);color:var(--label);
-         border-radius:6px;padding:7px 10px;font-size:12.5px}
-  .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
-  .card{border:1px solid var(--border1);background:var(--layer1);border-radius:9px;
-        padding:12px 13px;display:flex;flex-direction:column;gap:8px}
-  .name{font-weight:600;font-size:13px;word-break:break-all}
-  .sum{color:var(--label2);font-size:12px;line-height:1.55}
-  .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;color:var(--label2);font-size:11px}
-  .tag{border:1px solid var(--border1);border-radius:999px;padding:1px 8px;font-size:11px}
-  .tag-warn{color:var(--warn);border-color:var(--warn)}
-  .tag-error{color:var(--error);border-color:var(--error)}
-  .tag-ok{color:var(--success);border-color:var(--success)}
-  .actions{display:flex;gap:8px;margin-top:auto;padding-top:4px}
-  .status{margin-top:18px;color:var(--label2);font-size:12px;line-height:1.7;
-          border-top:1px solid var(--border1);padding-top:12px;white-space:pre-wrap}
-  .status.error{color:var(--error)}
-  .installed{margin-top:22px}
-  .installed h2{font-size:13px;margin:0 0 8px}
-  .row{display:flex;gap:10px;align-items:center;justify-content:space-between;
-       border-bottom:1px solid var(--border1);padding:8px 2px;font-size:12.5px}
-  .empty{color:var(--label2);padding:24px 4px;text-align:center}
-  .auth{max-width:420px;margin:44px auto;display:flex;flex-direction:column;gap:12px}
-  .auth h2{margin:0;font-size:16px}
-  .auth .hint{color:var(--label2);font-size:12px;line-height:1.6}
-  .auth label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--label2)}
-  .auth .err{color:var(--error);font-size:12px;line-height:1.6}
-  .code{font:700 26px/1 ui-monospace,Consolas,monospace;letter-spacing:5px;
-        color:var(--brand);text-align:center;padding:10px 0}
-  .hidden{display:none !important}
-  .tabs{display:flex;gap:8px;margin-bottom:14px}
-  .tab.on{border-color:var(--brand);color:var(--brand);background:var(--layer2)}
-  .panel-row{display:grid;gap:14px;grid-template-columns:1fr 1fr;align-items:start}
-  @media (max-width:900px){.panel-row{grid-template-columns:1fr}}
-  .panel{border:1px solid var(--border1);background:var(--layer1);border-radius:9px;
-         padding:12px 13px;margin-bottom:14px}
-  .panel h2{font-size:13px;margin:0 0 10px;display:flex;gap:8px;align-items:baseline}
-  .table{display:flex;flex-direction:column}
-  .trow{display:flex;gap:8px;align-items:center;justify-content:space-between;
-        border-bottom:1px solid var(--border1);padding:7px 2px;font-size:12.5px}
-  .trow:last-child{border-bottom:none}
-  .trow .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .trow .sub{color:var(--label2);font-size:11px}
-  .form{display:flex;flex-direction:column;gap:8px;margin-top:12px;
-        border-top:1px dashed var(--border1);padding-top:12px}
-  .form.inline{flex-direction:row;flex-wrap:wrap;align-items:center}
-  .form.inline input,.form.inline select{width:auto;flex:1;min-width:140px}
-  .form-title{font-size:12px;color:var(--label2)}
-  .checkbox{flex-direction:row;align-items:center;gap:6px;display:flex}
-  .checkbox input{width:auto}
-  .chips{display:flex;gap:6px;flex-wrap:wrap}
-  .chip{border:1px solid var(--border2);border-radius:999px;padding:2px 9px;font-size:11px;
-        cursor:pointer;background:var(--layer1);color:var(--label2)}
-  .chip.on{border-color:var(--brand);color:var(--brand);background:var(--layer2)}
-</style>
+<title>内部插件市场 · 安装</title>
+<link rel="stylesheet" href="/dsh-market/assets/market.css" />
 </head>
 <body>
 <div class="chromebar" aria-hidden="true"></div>
@@ -136,7 +19,7 @@
 <main class="wrap">
   <section id="view-noService" class="auth hidden">
     <h2>未配置市场服务端</h2>
-    <div class="hint">这个插件是市场的<strong>客户端</strong>：账号、权限、插件目录都在独立的市场服务端，
+    <div class="hint">这个页面是市场的<strong>客户端</strong>：账号、权限、插件目录都在独立的市场服务端，
       本机只负责把授权过的插件装进当前 profile。</div>
     <div class="hint">
       在启动 DSH 的环境里设置 <code>MARKET_SERVICE_URL</code>，例如：<br />
@@ -148,7 +31,7 @@
 
   <section id="view-login" class="auth hidden">
     <h2>登录</h2>
-    <div class="hint">账号由管理员在市场服务端创建，没有自助注册。首次登录后必须修改初始密码。</div>
+    <div class="hint">账号由管理员在服务端控制台创建，没有自助注册。首次登录后必须修改初始密码。</div>
     <label>用户名<input type="text" id="login-user" autocomplete="username" /></label>
     <label>密码<input type="password" id="login-pass" autocomplete="current-password" /></label>
     <button class="btn btn-primary" id="login-submit">登录</button>
@@ -165,259 +48,44 @@
     <div class="err" id="pw-err"></div>
   </section>
 
-  <section id="view-activate" class="auth hidden">
-    <h2>授权这台设备登录</h2>
-    <div class="hint">一个本地应用正在请求访问内部插件市场。确认后它才能使用你的身份。</div>
-    <div class="code" id="activate-code"></div>
-    <button class="btn btn-primary" id="activate-approve">授权</button>
-    <button class="btn" id="activate-cancel">取消</button>
-    <div class="err" id="activate-err"></div>
-  </section>
+  <!--
+    This page installs and uninstalls, and nothing else.
 
+    Accounts, groups, plugin rules, publishing and artifact state are administration,
+    and they live in the server console (`/console`). Showing them here meant every
+    user saw a 权限管理 tab they could not use, and an administrator doing policy work
+    had to navigate a plugin catalog to reach it. The service still owns every
+    decision — this page cannot grant itself anything.
+  -->
   <section id="view-market" class="hidden">
-    <div class="tabs">
-      <button class="btn tab on" data-tab="browse">插件目录</button>
-      <button class="btn tab hidden" data-tab="admin" id="tab-admin">权限管理</button>
+    <div class="note" id="note">加载中…</div>
+    <div class="bar">
+      <input type="search" id="query" placeholder="搜索插件名 / 摘要 / 归属团队" />
+      <span class="meta" id="count"></span>
     </div>
-
-    <div id="panel-browse">
-      <div class="note" id="note">加载中…</div>
-      <div class="bar">
-        <input type="search" id="query" placeholder="搜索插件名 / 摘要 / 归属团队" />
-        <span class="meta" id="count"></span>
-      </div>
-      <div class="grid" id="grid"></div>
-    </div>
-
-    <div id="panel-admin" class="hidden">
-      <div class="note">
-        权限模型：<code>用户 → 组 → 插件规则</code>。规则用 glob（如 <code>@dsh-internal/dsh-plugin-*</code>）。
-        <strong>默认拒绝</strong>：没有任何规则授予就不能安装；命中 <code>deny</code> 时 deny 优先。
-      </div>
-
-      <div class="panel-row">
-        <section class="panel">
-          <h2>账号<span class="meta" id="users-count"></span></h2>
-          <div class="table" id="users-table"></div>
-          <div class="form">
-            <div class="form-title">新建账号</div>
-            <input type="text" id="nu-name" placeholder="用户名（内部工号/英文名）" />
-            <input type="text" id="nu-display" placeholder="显示名（可选）" />
-            <input type="password" id="nu-pass" placeholder="初始密码（首登强制修改）" />
-            <label class="checkbox"><input type="checkbox" id="nu-admin" /> 管理员角色</label>
-            <div class="chips" id="nu-groups"></div>
-            <button class="btn btn-primary" id="nu-submit">创建账号</button>
-          </div>
-        </section>
-
-        <section class="panel">
-          <h2>权限组</h2>
-          <div class="table" id="groups-table"></div>
-          <div class="form">
-            <div class="form-title">新建组</div>
-            <input type="text" id="ng-id" placeholder="组 ID（英文，如 billing）" />
-            <input type="text" id="ng-desc" placeholder="说明（可选）" />
-            <button class="btn btn-primary" id="ng-submit">创建组</button>
-          </div>
-        </section>
-      </div>
-
-      <section class="panel">
-        <h2>组 → 插件规则</h2>
-        <div class="table" id="grants-table"></div>
-        <div class="form inline">
-          <select id="gr-group"></select>
-          <input type="text" id="gr-pattern" placeholder="插件匹配（glob），如 @dsh-internal/dsh-plugin-*" />
-          <select id="gr-effect">
-            <option value="allow">allow（授予）</option>
-            <option value="deny">deny（拒绝，优先）</option>
-          </select>
-          <select id="gr-channel">
-            <option value="">全部通道</option>
-            <option value="stable">仅 stable</option>
-            <option value="beta">仅 beta</option>
-          </select>
-          <button class="btn btn-primary" id="gr-submit">添加规则</button>
-        </div>
-      </section>
-    </div>
-
+    <div class="grid" id="grid"></div>
     <div class="status" id="status"></div>
   </section>
 </main>
 
+<script src="/dsh-market/assets/shared.js"></script>
 <script>
-const $ = (id) => document.getElementById(id)
-const TOKEN_KEY = 'dsh.market.token'
-/** Which service the stored token belongs to — a token is not portable across services. */
-const SERVICE_KEY = 'dsh.market.service'
-
-/**
- * Reserve the window-control strip only when running inside the desktop shell.
- *
- * The shell exposes `globalThis.dshDesktopBoot` before this page's scripts run.
- * In a normal browser tab there is no overlay, so the strip stays collapsed —
- * otherwise the page would carry a mysterious 40px gap.
- */
-if (globalThis.dshDesktopBoot !== undefined) document.body.classList.add('chrome')
+const S = globalThis.MarketShell
+const { $, state, service, local, show, status, setWho, tag } = S
 
 let catalog = null
-let adminGroups = []
-let adminUsers = []
-let isAdmin = false
-let profileDir = null
-/** Filled from GET /dsh-market/config on boot. */
-let serviceUrl = null
-let serviceConfigured = false
+const installedMap = new Map()
 
-const token = {
-  get: () => localStorage.getItem(TOKEN_KEY),
-  set: (value) => localStorage.setItem(TOKEN_KEY, value),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
-}
-
-function show(view) {
-  for (const name of ['noService', 'login', 'password', 'activate', 'market']) {
-    $(`view-${name}`).classList.toggle('hidden', name !== view)
-  }
-  const inMarket = view === 'market'
-  $('refresh').classList.toggle('hidden', !inMarket)
-  $('logout').classList.toggle('hidden', !inMarket)
-  $('tab-admin').classList.toggle('hidden', !(inMarket && isAdmin))
-  if (!inMarket || !isAdmin) switchTab('browse')
-}
-
-function switchTab(tab) {
-  for (const button of document.querySelectorAll('.tab')) {
-    button.classList.toggle('on', button.dataset.tab === tab)
-  }
-  $('panel-browse').classList.toggle('hidden', tab !== 'browse')
-  $('panel-admin').classList.toggle('hidden', tab !== 'admin')
-}
-
-function setWho(text) { $('who').textContent = text || '' }
-
-function status(message, isError) {
-  const el = $('status')
-  el.textContent = message || ''
-  el.classList.toggle('error', Boolean(isError))
-}
-
-/**
- * Two different backends, on purpose:
- *   service(path) -> the market service, authoritative for identity and policy
- *   local(path)   -> this machine's plugin, which owns the profile and its files
- */
-async function service(path, options = {}) {
-  return request(`${serviceUrl}${path}`, options)
-}
-
-async function local(path, options = {}) {
-  return request(path, options)
-}
-
-async function request(url, options = {}) {
-  const headers = { accept: 'application/json', ...(options.headers || {}) }
-  if (options.body !== undefined) headers['content-type'] = 'application/json'
-  if (options.auth !== false && token.get()) headers.authorization = `Bearer ${token.get()}`
-
-  let response
-  try {
-    response = await fetch(url, {
-      method: options.method || 'GET',
-      headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    })
-  } catch (error) {
-    return {
-      ok: false,
-      status: 0,
-      body: { code: 'E_UNREACHABLE', detail: `无法连接 ${url}：${error?.message ?? error}` },
-    }
-  }
-
-  let body = null
-  try { body = await response.json() } catch { body = null }
-
-  if (response.status === 401) {
-    token.clear()
-    show('login')
-    throw Object.assign(new Error('unauthenticated'), { code: 'E_NOT_LOGGED_IN', status: 401 })
-  }
-  if (response.status === 403 && body?.code === 'E_MUST_CHANGE_PASSWORD') {
-    show('password')
-    throw Object.assign(new Error('must-change-password'), { code: body.code, status: 403 })
-  }
-  return { ok: response.ok, status: response.status, body }
-}
-
-// ------------------------------------------------------------------ 认证动作
-
-async function doLogin() {
-  const username = $('login-user').value.trim()
-  const password = $('login-pass').value
-  $('login-err').textContent = ''
-  if (!username || !password) { $('login-err').textContent = '请输入用户名与密码'; return }
-  const result = await service('/dsh-market/auth/login', {
-    method: 'POST', body: { username, password }, auth: false,
-  })
-  if (!result.ok) {
-    $('login-err').textContent = result.body?.detail || result.body?.code || `登录失败（HTTP ${result.status}）`
-    return
-  }
-  token.set(result.body.token)
-  localStorage.setItem(SERVICE_KEY, serviceUrl ?? '')
-  $('login-pass').value = ''
-  if (result.body.mustChangePassword) {
-    setWho(result.body.user?.displayName ?? username)
-    show('password')
-    return
-  }
-  await enterMarket()
-}
-
-async function doChangePassword() {
-  const next = $('pw-next').value
-  const again = $('pw-next2').value
-  $('pw-err').textContent = ''
-  if (next.length < 12) { $('pw-err').textContent = '新密码至少 12 位'; return }
-  if (next !== again) { $('pw-err').textContent = '两次输入的新密码不一致'; return }
-  const result = await service('/dsh-market/auth/password', { method: 'POST', body: { newPassword: next } })
-  if (!result.ok) {
-    $('pw-err').textContent = result.body?.detail || result.body?.code || `改密失败（HTTP ${result.status}）`
-    return
-  }
-  $('pw-next').value = $('pw-next2').value = ''
-  await enterMarket()
-}
-
-async function doLogout() {
-  try { await service('/dsh-market/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
-  token.clear()
-  catalog = null
-  setWho('')
-  $('grid').textContent = ''
-  $('installed').textContent = ''
-  $('note').textContent = ''
-  status('')
-  show('login')
-}
-
-// -------------------------------------------------------------------- 市场页
-
-function tag(text, cls) {
-  const span = document.createElement('span')
-  span.className = 'tag' + (cls ? ' ' + cls : '')
-  span.textContent = text
-  return span
-}
+// ---------------------------------------------------------------------- 渲染
 
 function renderNote() {
+  const consoleUrl = `${String(state.serviceUrl ?? '').replace(/\/+$/, '')}/console`
   $('note').textContent =
-    `服务端：${serviceUrl}\n` +
+    `服务端：${state.serviceUrl}\n` +
     `已登录：${catalog.user?.displayName ?? catalog.user?.username}　权限组：${(catalog.groups || []).join('、') || '无组'}\n` +
-    `本机 profile：${profileDir ?? '(未知)'}\n` +
-    '只显示你的权限组被授权的条目（默认拒绝，deny 优先）。下载与判定在服务端，落盘在本机。'
+    `本机 profile：${state.profileDir ?? '(未知)'}\n` +
+    '只显示你的权限组被授权的条目（默认拒绝，deny 优先）。下载与判定在服务端，落盘在本机。\n' +
+    `账号、权限、发布由管理员在服务端控制台处理：${consoleUrl}`
 }
 
 function cardOf(entry) {
@@ -464,539 +132,173 @@ function cardOf(entry) {
   const actions = document.createElement('div')
   actions.className = 'actions'
 
-  // The card IS the install state: already-installed plugins offer 卸载, the rest
-  // offer 安装. There is no separate "installed" list to cross-check.
+  // The card IS the install state: an installed plugin offers 卸载, the rest offer
+  // 安装. There is no separate "installed" list to cross-check.
   if (installedHere) {
-    const upToDate = !entry.version || installedHere.version === entry.version
     const uninstall = document.createElement('button')
     uninstall.className = 'btn btn-danger'
     uninstall.textContent = '卸载'
     uninstall.addEventListener('click', () => doUninstall(entry, uninstall))
     actions.appendChild(uninstall)
 
-    if (!upToDate) {
-      const upgrade = document.createElement('button')
-      upgrade.className = 'btn btn-primary'
-      upgrade.textContent = `更新到 ${entry.version}`
-      upgrade.disabled = !entry.canInstall
-      upgrade.addEventListener('click', () => doInstall(entry, upgrade))
-      actions.appendChild(upgrade)
-    } else {
-      const reinstalled = document.createElement('button')
-      reinstalled.className = 'btn'
-      reinstalled.textContent = '重新安装'
-      reinstalled.disabled = !entry.canInstall
-      reinstalled.addEventListener('click', () => doInstall(entry, reinstalled))
-      actions.appendChild(reinstalled)
+    if (entry.version && installedHere.version !== entry.version) {
+      const update = document.createElement('button')
+      update.className = 'btn btn-primary'
+      update.textContent = `更新到 ${entry.version}`
+      update.addEventListener('click', () => doInstall(entry, update))
+      actions.appendChild(update)
     }
-  } else {
+  } else if (entry.canInstall) {
     const install = document.createElement('button')
     install.className = 'btn btn-primary'
-    install.textContent = entry.canInstall ? '安装' : '不可安装'
-    install.disabled = !entry.canInstall
+    install.textContent = '安装'
     install.addEventListener('click', () => doInstall(entry, install))
     actions.appendChild(install)
+  } else {
+    const blocked = document.createElement('button')
+    blocked.className = 'btn'
+    blocked.textContent = '不可安装'
+    blocked.disabled = true
+    actions.appendChild(blocked)
   }
-
-  const detail = document.createElement('button')
-  detail.className = 'btn'
-  detail.textContent = '详情'
-  detail.addEventListener('click', async () => {
-    const res = await service('/dsh-market/detail?name=' + encodeURIComponent(entry.name))
-    if (!res.ok) { status(`详情读取失败：${res.body?.code || 'HTTP ' + res.status}`, true); return }
-    status(
-      `${res.body.name}@${res.body.version}（${res.body.channel}）\n${res.body.summary || ''}\n` +
-      `DSH 兼容：${res.body.dsh || '未声明'}\n权限声明：${(res.body.permissions || []).join('、') || '无'}\n` +
-      `sha256：${res.body.sha256}\n` +
-      `本机：${installedHere ? `已安装 ${installedHere.version ?? '(未知版本)'}` : '未安装'}\n` +
-      `历史版本：${(res.body.versions || []).map((item) => `${item.version}@${item.channel}(${item.status})`).join('、') || '无'}`,
-    )
-  })
-  actions.appendChild(detail)
 
   card.appendChild(actions)
   return card
 }
 
-async function doInstall(entry, button) {
-  button.disabled = true
-  button.textContent = '安装中…'
-  status(
-    `正在安装 ${entry.name}@${entry.version}\n` +
-    '  1. 用你的令牌从服务端下载（服务端会再鉴权一次）\n' +
-    '  2. 本机校验 sha256\n' +
-    '  3. 解包 → 写入本机 profile → 注册',
-  )
-  try {
-    const res = await local('/dsh-market/install', {
-      method: 'POST',
-      body: {
-        token: token.get(),
-        name: entry.name,
-        version: entry.version,
-        sha256: entry.sha256,
-        channel: entry.channel,
-      },
-    })
-    const body = res.body || {}
-    if (res.ok && body.ok) {
-      status(
-        `安装成功：${body.name}@${body.version}\n` +
-        `类型：${body.kind === 'bundle' ? '组合包（bundle）' : '普通插件（plugin）'}\n` +
-        `注册位置：${body.registeredIn}\n` +
-        `目标目录：${body.target}\n文件数：${body.files}\n` +
-        `sha256 校验：通过（${String(body.sha256).slice(0, 16)}…）\n` +
-        '需要重启 DSH 生效。',
-      )
-      await loadInstalled()
-    } else {
-      status(`安装失败：${body.code || 'HTTP ' + res.status}${body.detail ? ` — ${body.detail}` : ''}`, true)
-    }
-  } catch (error) {
-    if (error.code !== 'E_NOT_LOGGED_IN') status('安装请求失败：' + error, true)
-  } finally {
-    button.disabled = !entry.canInstall
-    button.textContent = entry.canInstall ? '安装' : '不可安装'
-  }
-}
-
 function renderGrid() {
-  const query = $('query').value.trim().toLowerCase()
   const grid = $('grid')
+  const query = $('query').value.trim().toLowerCase()
   grid.textContent = ''
-  const all = catalog?.entries || []
-  const entries = all.filter((entry) => {
+  const entries = (catalog?.entries ?? []).filter((entry) => {
     if (!query) return true
-    return (entry.name + ' ' + (entry.summary || '') + ' ' + (entry.owner || '')).toLowerCase().includes(query)
+    return [entry.name, entry.summary, entry.owner].some(
+      (value) => typeof value === 'string' && value.toLowerCase().includes(query),
+    )
   })
-  $('count').textContent = entries.length + ' / ' + all.length + ' 条'
+  $('count').textContent = `${entries.length} / ${(catalog?.entries ?? []).length} 个条目`
   if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = all.length === 0 ? '服务端目录为空，或你的权限组没有任何被授权的插件。' : '没有匹配的插件。'
+    empty.textContent = (catalog?.entries ?? []).length === 0
+      ? '没有可用条目。可能是你的权限组还没有被授予任何插件规则，请联系管理员。'
+      : '没有匹配的条目。'
     grid.appendChild(empty)
     return
   }
   for (const entry of entries) grid.appendChild(cardOf(entry))
 }
 
-/**
- * What this profile already holds, keyed by package name. The catalog cards read
- * from it, so there is no separate "installed" list to drift out of sync.
- */
-const installedMap = new Map()
+// ------------------------------------------------------------------ 加载数据
 
 async function loadInstalled() {
   installedMap.clear()
-  const res = await local('/dsh-market/installed', { auth: false })
-  if (res.ok) {
-    for (const entry of res.body.entries ?? []) installedMap.set(entry.name, entry)
-  } else {
-    status(`本机已装状态读取失败：HTTP ${res.status}`, true)
+  try {
+    const result = await local('/dsh-market/installed')
+    for (const item of result.body?.installed ?? []) installedMap.set(item.name, item)
+  } catch { /* the catalog still renders; install buttons just cannot tell state */ }
+}
+
+async function loadCatalog() {
+  status('')
+  $('note').textContent = '加载中…'
+  try {
+    const result = await service('/dsh-market/catalog')
+    if (!result.ok) {
+      $('note').textContent = result.body?.detail || result.body?.code || `加载失败（HTTP ${result.status}）`
+      return
+    }
+    catalog = result.body
+    renderNote()
+    renderGrid()
+  } catch { /* request() switched views */ }
+}
+
+async function doInstall(entry, button) {
+  button.disabled = true
+  const label = button.textContent
+  button.textContent = '安装中…'
+  try {
+    const result = await local('/dsh-market/install', {
+      method: 'POST',
+      body: {
+        token: S.token.get(),
+        name: entry.name,
+        version: entry.version,
+        sha256: entry.sha256,
+        channel: entry.channel,
+      },
+    })
+    if (!result.ok) {
+      status(`安装失败：${result.body?.detail || result.body?.code}`, true)
+      return
+    }
+    status(result.body?.needRestart
+      ? `已安装 ${entry.name}。重启 DSH 后生效。`
+      : `已安装 ${entry.name}。`)
+    await loadInstalled()
+    renderGrid()
+  } catch (error) {
+    status(`安装失败：${error?.message ?? error}`, true)
+  } finally {
+    button.disabled = false
+    button.textContent = label
   }
-  if (catalog) renderGrid()
 }
 
 async function doUninstall(entry, button) {
   button.disabled = true
+  const label = button.textContent
   button.textContent = '卸载中…'
   try {
-    const out = await local('/dsh-market/uninstall', { method: 'POST', body: { name: entry.name } })
-    if (out.ok && out.body?.ok) {
-      status(
-        `已卸载 ${entry.name}\n` +
-        `删除文件：${out.body.filesRemoved ? '是' : '否'}\n` +
-        `清除注册：${out.body.registrationCleared ? '是' : '否'}\n` +
-        '需要重启 DSH 生效。',
-      )
-      await loadInstalled()
-    } else {
-      status(`卸载失败：${out.body?.code || 'HTTP ' + out.status}`, true)
+    const result = await local('/dsh-market/uninstall', { method: 'POST', body: { name: entry.name } })
+    if (!result.ok) {
+      status(`卸载失败：${result.body?.detail || result.body?.code}`, true)
+      return
     }
+    status(`已卸载 ${entry.name}。重启 DSH 后生效。`)
+    await loadInstalled()
+    renderGrid()
+  } catch (error) {
+    status(`卸载失败：${error?.message ?? error}`, true)
   } finally {
     button.disabled = false
-    button.textContent = '卸载'
+    button.textContent = label
   }
 }
 
-async function loadCatalog() {
-  const res = await service('/dsh-market/catalog')
-  if (!res.ok) {
-    status(`目录加载失败：${res.body?.code || 'HTTP ' + res.status}${res.body?.detail ? ' — ' + res.body.detail : ''}`, true)
-    $('note').textContent = '无法从服务端读取目录。'
-    return
-  }
-  catalog = res.body
-  renderNote()
-  renderGrid()
-}
+// ------------------------------------------------------------------ 装配
 
-async function enterMarket() {
-  const me = await service('/dsh-market/auth/me')
-  if (!me.ok) return
-  if (me.body.mustChangePassword) {
-    setWho(me.body.user?.displayName ?? me.body.user?.username)
-    show('password')
-    return
-  }
-  isAdmin = me.body.role === 'admin'
-  setWho(
-    `${me.body.user?.displayName ?? me.body.user?.username}` +
-    `（${(me.body.groups ?? []).join('、') || '无组'}${isAdmin ? ' · 管理员' : ''}）`,
-  )
-  show('market')
-  // Installed state first, so the very first paint of the grid already shows
-  // 已安装/安装 correctly instead of flashing the wrong button.
-  await loadInstalled()
+S.onAuthenticated(async () => {
+  setWho(state.me?.displayName ?? state.me?.username ?? '')
+  $('login-service').textContent = `服务端：${state.serviceUrl}`
   await loadCatalog()
-  if (isAdmin) await loadAdmin()
-}
-
-// ------------------------------------------------------------------ 权限管理
-
-function chip(text, on, onClick) {
-  const button = document.createElement('button')
-  button.className = 'chip' + (on ? ' on' : '')
-  button.textContent = text
-  button.addEventListener('click', onClick)
-  return button
-}
-
-function trow(children) {
-  const row = document.createElement('div')
-  row.className = 'trow'
-  for (const child of children) {
-    if (child === null) continue
-    if (typeof child === 'string') {
-      const span = document.createElement('span')
-      span.className = 'grow'
-      span.textContent = child
-      row.appendChild(span)
-    } else {
-      row.appendChild(child)
-    }
-  }
-  return row
-}
-
-function miniButton(text, onClick, danger) {
-  const button = document.createElement('button')
-  button.className = 'btn btn-mini' + (danger ? ' btn-danger' : '')
-  button.textContent = text
-  button.addEventListener('click', onClick)
-  return button
-}
-
-async function loadAdmin() {
-  const [users, groups] = await Promise.all([
-    service('/dsh-market/admin/users'),
-    service('/dsh-market/admin/groups'),
-  ])
-  if (!users.ok || !groups.ok) {
-    status(`管理数据读取失败：${users.body?.code ?? ''} ${groups.body?.code ?? ''}`, true)
-    return
-  }
-  adminUsers = users.body.users ?? []
-  adminGroups = groups.body.groups ?? []
-  renderUsers()
-  renderGroups()
-  renderGrants()
-  renderNewUserGroups()
-}
-
-function renderUsers() {
-  const host = $('users-table')
-  host.textContent = ''
-  $('users-count').textContent = `共 ${adminUsers.length} 个`
-
-  for (const user of adminUsers) {
-    const label = document.createElement('span')
-    label.className = 'grow'
-    label.textContent = `${user.username}${user.displayName && user.displayName !== user.username ? `（${user.displayName}）` : ''}`
-    const sub = document.createElement('span')
-    sub.className = 'sub'
-    sub.textContent =
-      `${user.role}　${user.groups.join('、') || '无组'}` +
-      `${user.status === 'disabled' ? '　已停用' : ''}` +
-      `${user.mustChangePassword ? '　待改密' : ''}`
-    label.appendChild(document.createElement('br'))
-    label.appendChild(sub)
-
-    const actions = document.createElement('span')
-    actions.style.display = 'flex'
-    actions.style.gap = '6px'
-
-    actions.appendChild(miniButton(user.role === 'admin' ? '降为成员' : '设为管理员', async () => {
-      const out = await service('/dsh-market/admin/role', {
-        method: 'POST',
-        body: { username: user.username, role: user.role === 'admin' ? 'member' : 'admin' },
-      })
-      status(out.ok ? `${user.username} 角色已改为 ${out.body.role}` : `失败：${out.body?.code}`, !out.ok)
-      await loadAdmin()
-    }))
-
-    actions.appendChild(miniButton(user.status === 'disabled' ? '启用' : '停用', async () => {
-      const next = user.status === 'disabled' ? 'active' : 'disabled'
-      const out = await service('/dsh-market/admin/status', {
-        method: 'POST', body: { username: user.username, status: next },
-      })
-      status(
-        out.ok
-          ? `${user.username} → ${next}${out.body.revokedSessions ? `，已吊销 ${out.body.revokedSessions} 个会话` : ''}`
-          : `操作失败：${out.body?.code}`,
-        !out.ok,
-      )
-      await loadAdmin()
-    }, user.status !== 'disabled'))
-
-    actions.appendChild(miniButton('重置密码', async () => {
-      const next = prompt(`为 ${user.username} 设置新的初始密码（至少 12 位）`)
-      if (!next) return
-      const out = await service('/dsh-market/admin/password', {
-        method: 'POST', body: { username: user.username, password: next, mustChange: true },
-      })
-      status(out.ok ? `${user.username} 的密码已重置，下次登录需改密` : `重置失败：${out.body?.code}`, !out.ok)
-    }))
-
-    host.appendChild(trow([label, actions]))
-  }
-}
-
-function renderNewUserGroups() {
-  const host = $('nu-groups')
-  host.textContent = ''
-  if (adminGroups.length === 0) {
-    host.textContent = '（还没有组，先去右侧建一个）'
-    return
-  }
-  for (const group of adminGroups) {
-    host.appendChild(chip(group.id, false, (event) => event.currentTarget.classList.toggle('on')))
-  }
-}
-
-function renderGroups() {
-  const host = $('groups-table')
-  host.textContent = ''
-  if (adminGroups.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'empty'
-    empty.textContent = '还没有任何组。没有组的账号什么都装不了（默认拒绝）。'
-    host.appendChild(empty)
-    return
-  }
-  for (const group of adminGroups) {
-    const label = document.createElement('span')
-    label.className = 'grow'
-    label.textContent = `${group.id}　${group.description || ''}`
-    const sub = document.createElement('span')
-    sub.className = 'sub'
-    sub.textContent = `成员 ${group.members.length ? group.members.join('、') : '无'}　规则 ${group.grants.length}`
-    label.appendChild(document.createElement('br'))
-    label.appendChild(sub)
-
-    const actions = document.createElement('span')
-    actions.style.display = 'flex'
-    actions.style.gap = '6px'
-    actions.appendChild(miniButton('加成员', async () => {
-      const username = prompt(`把谁加入 ${group.id}？（输入用户名）`)
-      if (!username) return
-      const out = await service('/dsh-market/admin/membership', {
-        method: 'POST', body: { username, groupId: group.id, on: true },
-      })
-      status(out.ok ? `${username} 已加入 ${group.id}` : `失败：${out.body?.code} — ${out.body?.detail ?? ''}`, !out.ok)
-      await loadAdmin()
-    }))
-    actions.appendChild(miniButton('移出成员', async () => {
-      const username = prompt(`把谁移出 ${group.id}？（输入用户名）`)
-      if (!username) return
-      const out = await service('/dsh-market/admin/membership', {
-        method: 'POST', body: { username, groupId: group.id, on: false },
-      })
-      status(out.ok ? `${username} 已移出 ${group.id}` : `失败：${out.body?.code}`, !out.ok)
-      await loadAdmin()
-    }))
-
-    host.appendChild(trow([label, actions]))
-  }
-}
-
-function renderGrants() {
-  const select = $('gr-group')
-  const previous = select.value
-  select.textContent = ''
-  for (const group of adminGroups) {
-    const option = document.createElement('option')
-    option.value = group.id
-    option.textContent = group.id
-    select.appendChild(option)
-  }
-  if (adminGroups.some((group) => group.id === previous)) select.value = previous
-
-  const host = $('grants-table')
-  host.textContent = ''
-  const rows = []
-  for (const group of adminGroups) {
-    for (const grant of group.grants) rows.push({ groupId: group.id, ...grant })
-  }
-  if (rows.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'empty'
-    empty.textContent = '还没有任何规则。没有任何规则授予 → 谁都装不了（默认拒绝）。'
-    host.appendChild(empty)
-    return
-  }
-
-  rows.sort((a, b) => (a.groupId + a.pluginPattern).localeCompare(b.groupId + b.pluginPattern))
-  for (const grant of rows) {
-    const label = document.createElement('span')
-    label.className = 'grow'
-    label.textContent = `${grant.groupId}　${grant.pluginPattern}`
-    const sub = document.createElement('span')
-    sub.className = 'sub'
-    sub.textContent = `${grant.effect === 'deny' ? 'deny（优先）' : 'allow'}　通道：${grant.channel || '全部'}`
-    label.appendChild(document.createElement('br'))
-    label.appendChild(sub)
-
-    const actions = document.createElement('span')
-    actions.appendChild(miniButton('删除', async () => {
-      const out = await service('/dsh-market/admin/grants', {
-        method: 'POST',
-        body: { groupId: grant.groupId, pluginPattern: grant.pluginPattern, remove: true },
-      })
-      status(out.ok ? `已删除规则 ${grant.pluginPattern}` : `删除失败：${out.body?.code}`, !out.ok)
-      await loadAdmin()
-    }, true))
-
-    host.appendChild(trow([label, actions]))
-  }
-}
-
-$('nu-submit').addEventListener('click', async () => {
-  const username = $('nu-name').value.trim()
-  const password = $('nu-pass').value
-  const groups = [...document.querySelectorAll('#nu-groups .chip.on')].map((chip) => chip.textContent)
-  if (!username || !password) { status('用户名与初始密码必填', true); return }
-  const out = await service('/dsh-market/admin/users', {
-    method: 'POST',
-    body: {
-      username,
-      password,
-      displayName: $('nu-display').value.trim() || undefined,
-      role: $('nu-admin').checked ? 'admin' : 'member',
-      groups,
-    },
-  })
-  status(
-    out.ok
-      ? `已创建 ${username}（组：${groups.join('、') || '无'}）\n请把初始密码线下告知本人，首次登录会强制改密。`
-      : `创建失败：${out.body?.code} — ${out.body?.detail ?? ''}`,
-    !out.ok,
-  )
-  if (out.ok) {
-    $('nu-name').value = $('nu-display').value = $('nu-pass').value = ''
-    $('nu-admin').checked = false
-    await loadAdmin()
-  }
+  await loadInstalled()
+  renderGrid()
+  show('market')
 })
 
-$('ng-submit').addEventListener('click', async () => {
-  const id = $('ng-id').value.trim()
-  if (!id) { status('组 ID 必填', true); return }
-  const out = await service('/dsh-market/admin/groups', {
-    method: 'POST', body: { id, description: $('ng-desc').value.trim() },
-  })
-  status(out.ok ? `已创建组 ${id}` : `创建失败：${out.body?.code} — ${out.body?.detail ?? ''}`, !out.ok)
-  if (out.ok) { $('ng-id').value = ''; $('ng-desc').value = ''; await loadAdmin() }
-})
-
-$('gr-submit').addEventListener('click', async () => {
-  const groupId = $('gr-group').value
-  const pluginPattern = $('gr-pattern').value.trim()
-  if (!groupId || !pluginPattern) { status('需要选择组并填写匹配规则', true); return }
-  const out = await service('/dsh-market/admin/grants', {
-    method: 'POST',
-    body: { groupId, pluginPattern, effect: $('gr-effect').value, channel: $('gr-channel').value || null },
-  })
-  status(
-    out.ok
-      ? `已添加规则：${groupId} → ${pluginPattern}（${$('gr-effect').value}）`
-      : `添加失败：${out.body?.code} — ${out.body?.detail ?? ''}`,
-    !out.ok,
-  )
-  if (out.ok) { $('gr-pattern').value = ''; await loadAdmin() }
-})
-
-for (const button of document.querySelectorAll('.tab')) {
-  button.addEventListener('click', () => switchTab(button.dataset.tab))
-}
-
-// -------------------------------------------------------------- 设备授权激活
-
-function runActivate(userCode) {
-  $('activate-code').textContent = userCode
-  $('activate-err').textContent = ''
-  show('activate')
-
-  $('activate-approve').onclick = async () => {
-    const result = await service('/dsh-market/auth/device/approve', { method: 'POST', body: { userCode } })
-    if (result.ok && result.body?.ok) {
-      status('已授权。可以回到发起登录的应用了。')
-      show('market')
-      await loadCatalog()
-      await loadInstalled()
-    } else {
-      $('activate-err').textContent = result.body?.code || `授权失败（HTTP ${result.status}）`
-    }
-  }
-  $('activate-cancel').onclick = () => {
-    status('已取消本次设备授权。')
-    show('market')
-    loadCatalog()
-    loadInstalled()
-  }
-}
-
-$('login-submit').addEventListener('click', doLogin)
-$('login-pass').addEventListener('keydown', (event) => { if (event.key === 'Enter') doLogin() })
-$('pw-submit').addEventListener('click', doChangePassword)
-$('logout').addEventListener('click', doLogout)
-$('refresh').addEventListener('click', () => { status(''); loadCatalog() })
+$('login-submit').addEventListener('click', S.doLogin)
+$('login-pass').addEventListener('keydown', (event) => { if (event.key === 'Enter') S.doLogin() })
+$('pw-submit').addEventListener('click', S.doChangePassword)
+$('logout').addEventListener('click', S.doLogout)
+$('refresh').addEventListener('click', () => { loadCatalog().then(() => loadInstalled().then(renderGrid)) })
 $('query').addEventListener('input', () => { if (catalog) renderGrid() })
 $('noService-retry').addEventListener('click', () => location.reload())
 
-;(async function boot() {
-  // 1) Ask this machine's plugin where the market service is.
-  const config = await local('/dsh-market/config', { auth: false })
-  serviceUrl = config.body?.serviceUrl ?? null
-  serviceConfigured = Boolean(config.body?.configured)
-  profileDir = config.body?.profileDir ?? null
-
-  if (!serviceConfigured) {
-    show('noService')
-    return
-  }
-  $('login-service').textContent = `服务端：${serviceUrl}`
-
-  // A token issued by a different service is meaningless here: drop it rather
-  // than showing a confusing 401.
-  if (token.get() && localStorage.getItem(SERVICE_KEY) !== serviceUrl) token.clear()
-
-  const activateCode = new URLSearchParams(location.search).get('activate')
-  if (!token.get()) {
-    show('login')
-    if (activateCode) $('login-err').textContent = '请先登录，登录后即可授权该设备。'
-    return
-  }
-  try {
-    await enterMarket()
-    if (activateCode) runActivate(activateCode)
-  } catch (error) {
-    if (error.code !== 'E_NOT_LOGGED_IN' && error.code !== 'E_MUST_CHANGE_PASSWORD') {
-      $('login-err').textContent = String(error)
-      show('login')
-    }
-  }
-})()
+S.init({
+  views: ['noService', 'login', 'password', 'market'],
+  onView: (view) => {
+    $('refresh').classList.toggle('hidden', view !== 'market')
+    $('logout').classList.toggle('hidden', view !== 'market')
+  },
+  onLogout: () => {
+    catalog = null
+    $('grid').textContent = ''
+    $('note').textContent = ''
+  },
+})
 </script>
 </body>
 </html>
+

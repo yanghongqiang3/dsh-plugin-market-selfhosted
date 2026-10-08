@@ -134,17 +134,52 @@ if (fs.existsSync(pagePath)) {
   } else {
     ok('page fetches outside /api (connection layer does not intercept)')
   }
-  // Service calls (cross-origin) vs local calls (this machine's profile).
-  for (const route of ['auth/login', 'auth/me', 'catalog', 'detail', 'admin/users', 'admin/grants']) {
-    page.includes(`/dsh-market/${route}`)
-      ? ok(`page calls service /dsh-market/${route}`)
-      : fail(`page does not call service /dsh-market/${route}`)
+
+  /**
+   * Where each call is made is now part of the contract.
+   *
+   * `auth/login`, `auth/me` and the local `config` probe moved into `web/shared.js`,
+   * which both surfaces load. The service call `detail` is no longer made at all: it
+   * was only used by the old admin tab. Asserting every route against the page alone
+   * would now be asserting the wrong file.
+   */
+  const sharedSource = fs.readFileSync(path.join(dir, 'web', 'shared.js'), 'utf8')
+  const consoleSource = fs.existsSync(path.join(dir, 'web', 'console.html'))
+    ? fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+    : ''
+
+  for (const route of ['auth/login', 'auth/me', 'auth/password', 'auth/logout']) {
+    sharedSource.includes(`/dsh-market/${route}`)
+      ? ok(`shared shell calls /dsh-market/${route}`)
+      : fail(`shared shell does not call /dsh-market/${route}`)
   }
-  for (const route of ['config', 'install', 'uninstall', 'installed']) {
+  sharedSource.includes('/dsh-market/config')
+    ? ok('shared shell probes the local host plugin for the service URL')
+    : fail('shared shell does not probe /dsh-market/config')
+
+  // Service calls this page owns, versus local calls this machine owns.
+  page.includes('/dsh-market/catalog')
+    ? ok('install page calls service /dsh-market/catalog')
+    : fail('install page does not call /dsh-market/catalog')
+  for (const route of ['install', 'uninstall', 'installed']) {
     page.includes(`/dsh-market/${route}`)
-      ? ok(`page calls local /dsh-market/${route}`)
-      : fail(`page does not call local /dsh-market/${route}`)
+      ? ok(`install page calls local /dsh-market/${route}`)
+      : fail(`install page does not call local /dsh-market/${route}`)
   }
+  // Administration is the console's job; the page must not reach for it at all.
+  for (const route of ['admin/users', 'admin/grants', 'admin/artifacts', 'publish']) {
+    page.includes(`/dsh-market/${route}`)
+      ? fail(`install page calls /dsh-market/${route} — that belongs to the console`)
+      : ok(`install page does not call /dsh-market/${route}`)
+    consoleSource.includes(`/dsh-market/${route}`)
+      ? ok(`console calls /dsh-market/${route}`)
+      : fail(`console does not call /dsh-market/${route}`)
+  }
+  // `detail` is gone: nothing renders a single-artifact detail view any more.
+  page.includes('/dsh-market/detail')
+    ? fail('install page calls /dsh-market/detail — the card already shows everything')
+    : ok('install page no longer calls /dsh-market/detail')
+
   // The install state belongs on the card, not in a second list.
   page.includes('id="installed"')
     ? fail('page still renders a separate "installed" list — state belongs on the card')
@@ -158,6 +193,91 @@ if (fs.existsSync(pagePath)) {
 
 // The client must not carry its own account/policy authority any more.
 const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+
+/**
+ * Two surfaces, two jobs — and neither may grow into the other again.
+ *
+ * The single-page version put a 权限管理 tab next to the plugin catalog. Every user
+ * saw an admin tab they could not use, and administrators had to navigate a catalog
+ * to reach policy work. Administration now lives in the SERVER console, reached by
+ * URL and served by the service; the DSH page is install/uninstall only.
+ *
+ * Comments are stripped before matching: a first attempt matched the explanatory
+ * comments describing this very split and failed on files that were correct.
+ */
+{
+  const stripComments = (text) => text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+
+  const marketPath = path.join(dir, 'web', 'market.html')
+  const consolePath = path.join(dir, 'web', 'console.html')
+
+  if (!fs.existsSync(consolePath)) {
+    fail('web/console.html missing — administration would have nowhere to live')
+  } else {
+    ok('web/console.html exists (administration lives here)')
+  }
+
+  if (fs.existsSync(marketPath)) {
+    const market = stripComments(fs.readFileSync(marketPath, 'utf8'))
+    // Admin ROUTES are the real tell; `entry.status === 'published'` is a catalog
+    // field and stays.
+    const adminRoutes = ['/dsh-market/admin/', '/dsh-market/publish']
+    const leaked = adminRoutes.filter((route) => market.includes(route))
+    if (leaked.length > 0) {
+      fail(`the DSH install page calls admin routes: ${leaked.join(', ')} — administration belongs to the console`)
+    } else {
+      ok('DSH install page calls no admin or publish route')
+    }
+    if (market.includes('id="tab-admin"') || market.includes('panel-admin')) {
+      fail('the DSH install page still has an admin tab')
+    } else {
+      ok('no admin tab on the DSH install page')
+    }
+    if (market.includes('/dsh-market/install') && market.includes('/dsh-market/uninstall')) {
+      ok('DSH install page offers install and uninstall')
+    } else {
+      fail('DSH install page must offer both install and uninstall')
+    }
+  }
+
+  if (fs.existsSync(consolePath)) {
+    const consolePage = stripComments(fs.readFileSync(consolePath, 'utf8'))
+    const installs = ['/dsh-market/install', '/dsh-market/uninstall']
+    const leaked = installs.filter((route) => consolePage.includes(route))
+    if (leaked.length > 0) {
+      fail(`the console calls install routes: ${leaked.join(', ')} — installing belongs to the DSH page`)
+    } else {
+      ok('console calls no install or uninstall route')
+    }
+    for (const route of ['/dsh-market/admin/users', '/dsh-market/admin/grants', '/dsh-market/publish']) {
+      consolePage.includes(route)
+        ? ok(`console calls ${route}`)
+        : fail(`console is missing ${route}`)
+    }
+    // The console must be self-contained, not embedded in DSH.
+    if (consolePage.includes('/dsh-market/config')) {
+      fail('console reads the DSH host plugin config — it must stand on its own URL')
+    } else {
+      ok('console does not depend on the DSH host plugin')
+    }
+  }
+
+  // Both surfaces share one copy of the plumbing and one stylesheet.
+  const sharedPath = path.join(dir, 'web', 'shared.js')
+  const cssPath = path.join(dir, 'web', 'market.css')
+  fs.existsSync(sharedPath) ? ok('web/shared.js exists (one copy of the auth plumbing)') : fail('web/shared.js missing')
+  fs.existsSync(cssPath) ? ok('web/market.css exists (one copy of the palette)') : fail('web/market.css missing')
+  for (const [label, file] of [['install page', marketPath], ['console', consolePath]]) {
+    if (!fs.existsSync(file)) continue
+    const text = fs.readFileSync(file, 'utf8')
+    text.includes('/dsh-market/assets/shared.js')
+      ? ok(`${label} loads the shared shell`)
+      : fail(`${label} does not load web/shared.js`)
+  }
+}
 
 // The in-app entry is a CLIENT-HALF registration, so the thing worth asserting is
 // the contract that makes a client half load at all. Each rule below was learned by
