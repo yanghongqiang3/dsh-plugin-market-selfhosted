@@ -114,11 +114,7 @@ const report = await cdp.eval(`
     const entry = document.getElementById('dsh-marketplace-entry');
     if (!entry) return JSON.stringify({ found: false });
     const r = entry.getBoundingClientRect();
-    const sec = document.getElementById('workspace-section');
-    const sr = sec ? sec.getBoundingClientRect() : null;
     const side = document.querySelector('.side');
-    const foot = document.querySelector('.side .foot');
-    const fr = foot ? foot.getBoundingClientRect() : null;
     const sideR = side ? side.getBoundingClientRect() : null;
 
     // Every other sidebar row: the entry must not overlap any of them.
@@ -131,20 +127,12 @@ const report = await cdp.eval(`
     return JSON.stringify({
       found: true,
       entry: { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), height: Math.round(r.height) },
-      workspaceSection: sr ? { top: Math.round(sr.top), bottom: Math.round(sr.bottom), left: Math.round(sr.left), right: Math.round(sr.right) } : null,
       side: sideR ? { top: Math.round(sideR.top), bottom: Math.round(sideR.bottom), left: Math.round(sideR.left), right: Math.round(sideR.right) } : null,
-      foot: fr ? { top: Math.round(fr.top), bottom: Math.round(fr.bottom) } : null,
       viewport: { w: window.innerWidth, h: window.innerHeight },
-      debug: globalThis.__MARKET_ENTRY_DEBUG__ ?? null,
       placed: entry.hasAttribute('data-placed'),
-      inlineTop: entry.style.top,
+      inlineStyle: { top: entry.style.top, bottom: entry.style.bottom, left: entry.style.left },
       rows,
       overlaps: overlaps.map((row) => row.text),
-      gapAboveHeading: sr ? Math.round(sr.top - r.bottom) : null,
-      gapBelowLastRow: (() => {
-        const above = rows.filter((row) => row.bottom <= r.top).sort((a, b) => b.bottom - a.bottom)[0];
-        return above ? Math.round(r.top - above.bottom) : null;
-      })(),
       style: { position: getComputedStyle(entry).position, display: getComputedStyle(entry).display },
     }, null, 2);
   })()
