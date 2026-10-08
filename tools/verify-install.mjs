@@ -334,6 +334,22 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     consolePage.includes('/dsh-market/admin/identity/unbind')
       ? ok('console can release a binding')
       : fail('console cannot release a binding')
+
+    /**
+     * The console must not describe binding as automatic.
+     *
+     * It did, for a while after binding became manual: the README was updated and this
+     * page was missed, so the admin-facing description of the feature was wrong. Text
+     * drifts out of date silently, which is exactly what a check is for.
+     */
+    consolePage.includes('登录时自动完成')
+      ? fail('console still says binding happens automatically on sign-in')
+      : ok('console does not claim binding is automatic')
+    // And it must not tell users that releasing a binding needs an administrator — the
+    // install page lets them do it themselves.
+    consolePage.includes('需管理员解绑')
+      ? fail('console claims unbinding needs an administrator')
+      : ok('console does not contradict self-service unbinding')
   }
 }
 
