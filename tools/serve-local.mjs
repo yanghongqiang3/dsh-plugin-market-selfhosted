@@ -21,6 +21,14 @@ const indexTaps = []
 const indexInjectListeners = []
 
 const webServer = {
+  /**
+   * The real service exposes the bound port (`get port()`). The entry link needs
+   * it to build an absolute URL — a relative href would resolve against the
+   * shell's `dsh-app://app` origin and replace the shell's SPA.
+   */
+  get port() {
+    return port
+  },
   register(route) {
     if (route.kind !== 'exact' && route.kind !== 'prefix') {
       throw new Error(`bad route kind: ${route.kind}`)

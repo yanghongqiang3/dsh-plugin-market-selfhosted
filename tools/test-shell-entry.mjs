@@ -78,10 +78,25 @@ ok(
 
 ok('样式选择器指向入口 id', String(styleRow?.text).includes('#dsh-marketplace-entry'))
 ok('markup 含入口 id', String(htmlRow?.html).includes('id="dsh-marketplace-entry"'))
-ok('markup 是指向 /market 的链接', String(htmlRow?.html).includes('href="/market"'))
 ok('入口文案可见（不是纯图标）', String(htmlRow?.html).includes('内部插件市场'))
 ok('有 hover 态', String(styleRow?.text).includes(':hover'))
 ok('层级压过壳内容', String(styleRow?.text).includes('z-index:2147483647'))
+
+// The link MUST be absolute AND MUST open a new window.
+//
+// A relative href resolves against the shell's own origin (`dsh-app://app/`), so
+// it becomes a SAME-WINDOW navigation: it runs through Electron's `will-navigate`
+// and replaces the shell's single-page app, leaving the user with no shell, no
+// back button and no way out — which is exactly what happened in production.
+// An absolute http URL with target="_blank" takes the other path: the main
+// window's `setWindowOpenHandler` hands http/https to the operating system.
+const entryHtml = String(htmlRow?.html)
+const entryHref = /href="([^"]*)"/.exec(entryHtml)?.[1] ?? ''
+ok('入口是绝对 http URL', /^http:\/\/127\.0\.0\.1:\d+\/market$/.test(entryHref), entryHref)
+ok('入口不是相对路径（相对路径会顶掉壳的 SPA）', !entryHref.startsWith('/'), entryHref || '(空)')
+ok('入口在新窗口打开', entryHtml.includes('target="_blank"'))
+ok('新窗口带 noopener', entryHtml.includes('rel="noopener'))
+ok('属性已转义（URL 进 HTML 属性）', !entryHtml.includes('href="/market"'))
 ok('每行都是纯 JSON 可序列化（要过 IPC）', (() => {
   try {
     const round = JSON.parse(JSON.stringify(rows))
