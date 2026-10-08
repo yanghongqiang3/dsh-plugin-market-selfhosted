@@ -978,12 +978,26 @@ function renderArtifacts() {
      */
     const kindLabels = { skill: '技能', bundle: '组合包', plugin: '插件' }
     const kind = artifact.kind ?? 'plugin'
+    /**
+     * `status`, not `state`.
+     *
+     * `rowToArtifact` publishes the DB's `state` column under the name `status` — the same
+     * name the client catalog uses. This page read `artifact.state`, which is simply
+     * `undefined`, and the consequences were not cosmetic:
+     *
+     *   - the state column rendered `undefined`;
+     *   - the 改状态 dialog's initial value was `undefined`, so no option matched and the
+     *     browser preselected the FIRST one (`draft`) — saving without touching the select
+     *     silently demoted a published artifact to a draft;
+     *   - `values.state === artifact.state` was never true, so every save sent a request.
+     */
+    const state = artifact.status
     const row = trow([
       [artifact.name, 'grow'],
       [kindLabels[kind] ?? kind, `col-kind kind-${kind}`],
       [artifact.version, 'col-role'],
       [artifact.channel, 'col-role'],
-      [artifact.state, 'col-status ' + (artifact.state === 'published' ? 'ok' : (artifact.state === 'revoked' ? 'bad' : ''))],
+      [state, 'col-status ' + (state === 'published' ? 'ok' : (state === 'revoked' ? 'bad' : ''))],
       [`${artifact.sizeBytes ?? 0} B`, 'col-status'],
     ])
     const actions = document.createElement('div')
@@ -992,27 +1006,60 @@ function renderArtifacts() {
     // irreversible change (revoked) a single click away, with no statement of what it
     // would do. The dialog names the consequence.
     actions.appendChild(miniButton('改状态', () => {
+      /**
+       * When a name has several versions, the operator picks WHICH one.
+       *
+       * The row shows one version, but the `versions` payload has always carried all of them
+       * — it was simply never rendered, so every other version was unreachable: a revoked
+       * 1.0.0 sitting under a published 1.1.0 could not be brought back, and a draft could not
+       * be promoted. Only shown when there is a choice, so the common case stays one field.
+       */
+      const allVersions = Array.isArray(artifact.versions) && artifact.versions.length > 0
+        ? artifact.versions
+        : [{ version: artifact.version, channel: artifact.channel, status: artifact.status }]
+      const fields = []
+      if (allVersions.length > 1) {
+        fields.push({
+          name: 'target',
+          label: `版本（该插件共 ${allVersions.length} 个）`,
+          type: 'select',
+          value: `${artifact.version}@${artifact.channel}`,
+          options: allVersions.map((v) => ({
+            value: `${v.version}@${v.channel}`,
+            label: `${v.version}　${v.channel}　${v.status}`,
+          })),
+        })
+      }
+      fields.push({
+        name: 'state',
+        // `status` — reading `state` here left the select on its first option (`draft`), so
+        // saving without touching it demoted a published artifact.
+        label: `状态（当前 ${artifact.status}）`,
+        type: 'select',
+        value: artifact.status,
+        options: states.map((value) => ({ value, label: value })),
+      })
       openForm({
         title: `${artifact.name}@${artifact.version}`,
-        hint: artifact.state === 'published'
+        hint: artifact.status === 'published'
           ? '改成 revoked 后，即使有人被授予权限也下载不到。'
           : '只有 published 状态可以被安装。',
         submitLabel: '保存',
-        fields: [{
-          name: 'state',
-          label: `状态（当前 ${artifact.state}）`,
-          type: 'select',
-          value: artifact.state,
-          options: states.map((value) => ({ value, label: value })),
-        }],
+        fields,
         onSubmit: async (values) => {
-          if (values.state === artifact.state) return { ok: true }
+          // The picked version wins; without a picker it is the row's own version.
+          const picked = String(values.target ?? `${artifact.version}@${artifact.channel}`)
+          const at = picked.lastIndexOf('@')
+          const version = picked.slice(0, at)
+          const channel = picked.slice(at + 1)
+          // `artifact.status` — see the note on the row renderer.
+          if (values.state === artifact.status && version === artifact.version) return { ok: true }
           const result = await service('/dsh-market/admin/artifacts/state', {
             method: 'POST',
-            body: { name: artifact.name, version: artifact.version, channel: artifact.channel, state: values.state },
+            body: { name: artifact.name, version, channel, state: values.state },
           })
           if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
-          status(`${artifact.name}@${artifact.version} 状态改为 ${values.state}。`)
+          status(`${artifact.name}@${version} 状态改为 ${values.state}。`)
           await loadArtifacts()
           return { ok: true }
         },

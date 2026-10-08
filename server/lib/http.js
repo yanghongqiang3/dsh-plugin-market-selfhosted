@@ -906,7 +906,15 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     const who = admin(req, res)
     if (!who) return
     const params = pageParams(url)
-    const decorated = artifacts.catalogRows().map((artifact) => ({
+    /**
+     * `adminRows()`, not `catalogRows()`.
+     *
+     * The catalog view drops every name whose versions are all non-publishable, which is right
+     * for clients and wrong here: revoking the only version of a plugin made it disappear from
+     * the console — the one screen that can revoke it back. Drafts and review-only artifacts
+     * vanished the same way, so a draft could never be promoted.
+     */
+    const decorated = artifacts.adminRows().map((artifact) => ({
       ...artifact,
       versions: artifacts.listVersions(artifact.name).map((item) => ({
         version: item.version,
@@ -918,7 +926,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     const filtered = needle === ''
       ? decorated
       : decorated.filter((artifact) =>
-        [artifact.name, artifact.version, artifact.channel, artifact.state, artifact.owner ?? '']
+        [artifact.name, artifact.version, artifact.channel, artifact.status, artifact.owner ?? '']
           .some((field) => String(field ?? '').toLowerCase().includes(needle)))
     // Same `paginate` helper the store uses, so clamping and the response shape cannot
     // drift between a paged list that lives in the store and one that lives here.

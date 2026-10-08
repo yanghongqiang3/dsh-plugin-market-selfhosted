@@ -265,19 +265,57 @@ export class Artifacts {
    * catalog shows and therefore what drives every 「更新到 X」 button.
    */
   catalogRows() {
-    const rows = this.db.prepare('SELECT * FROM artifacts').all()
-    const byName = new Map()
-    for (const row of rows) {
-      const list = byName.get(row.name)
-      if (list === undefined) byName.set(row.name, [row])
-      else list.push(row)
-    }
     const out = []
-    for (const [, list] of byName) {
+    for (const [, list] of this.rowsByName()) {
       const best = this.highest(list)
       if (best !== null && best !== undefined) out.push(best)
     }
     return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /**
+   * One row per name — its highest version REGARDLESS of state. The management view.
+   *
+   * `catalogRows()` drops any name whose versions are all non-publishable. That is exactly
+   * right for the client catalog — a revoked artifact must never be offered — and exactly
+   * wrong for the console, because the artifact an operator most needs to act on is the one
+   * they JUST revoked, and it disappeared from the only screen that could change it back.
+   *
+   * A draft-only artifact had the same fate, which is worse: a draft could never be promoted,
+   * and a review-only artifact could never be approved.
+   *
+   * Ordering still needs a valid semver — that is what "highest" means — but state is not a
+   * filter here.
+   */
+  adminRows() {
+    const out = []
+    for (const [, list] of this.rowsByName()) {
+      const best = this.highestAny(list)
+      if (best !== null && best !== undefined) out.push(best)
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** Raw rows grouped by name, so both row views share one grouping. */
+  rowsByName() {
+    const byName = new Map()
+    for (const row of this.db.prepare('SELECT * FROM artifacts').all()) {
+      const list = byName.get(row.name)
+      if (list === undefined) byName.set(row.name, [row])
+      else list.push(row)
+    }
+    return byName
+  }
+
+  /** The highest-versioned row of ANY state among raw rows, or null. */
+  highestAny(rows) {
+    let best = null
+    for (const row of rows) {
+      // The version must still be orderable; unlike `highest`, the state is irrelevant.
+      if (parseVersion(row.version) === null) continue
+      if (best === null || compareVersions(row.version, best.version) > 0) best = row
+    }
+    return rowToArtifact(best)
   }
 
   /** Every version of a name, oldest first — for auditing, including non-published. */

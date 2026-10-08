@@ -1058,6 +1058,51 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
 }
 
 /**
+ * The console must be able to see — and fix — an artifact it just revoked.
+ *
+ * Reported: revoking a plugin made it vanish from the console, so it could not be changed
+ * back. The management list was using `catalogRows()`, the CLIENT catalog view, which drops
+ * every name whose versions are all non-publishable. Drafts and review-only artifacts went the
+ * same way, so a draft could never be promoted.
+ *
+ * The second half is a field-name mismatch that had been silently breaking the console:
+ * `rowToArtifact` publishes the DB's `state` column as `status`, while the page read
+ * `artifact.state` — `undefined`. The state column rendered blank, the 改状态 select
+ * preselected its FIRST option (`draft`), and the admin search could not filter by state.
+ */
+{
+  const artifactsSource3 = fs.readFileSync(path.join(dir, 'server', 'lib', 'artifacts.js'), 'utf8')
+  const httpSource3 = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  const consoleSource4 = fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+
+  const adminRoute = /'\/dsh-market\/admin\/artifacts',[\s\S]{0,600}?adminRows\(\)/.test(httpSource3)
+  adminRoute
+    ? ok('控制台制品列表用 adminRows()（忽略状态）')
+    : fail('  管理列表用 catalogRows() —— 撤回/草稿的制品会从控制台消失')
+  artifactsSource3.includes('adminRows()') && artifactsSource3.includes('highestAny')
+    ? ok('  adminRows() 与 highestAny() 存在（与客户端视图分开）')
+    : fail('  没有管理专用的行视图')
+  // The client view must KEEP dropping non-publishable artifacts.
+  const catalogStillFilters = /catalogRows\(\)[\s\S]{0,200}?this\.highest\(/.test(artifactsSource3)
+  catalogStillFilters
+    ? ok('  客户端目录仍然只取可发布的版本')
+    : fail('  客户端目录不再过滤状态 —— 撤回的制品会被提供安装')
+
+  // `status`, never `state`, when READING an artifact row.
+  const readsState = /artifact\.state(?![\s\S]{0,80}?\/\/)/.test(consoleSource4.replace(/\/\*[\s\S]*?\*\//g, ''))
+  readsState
+    ? fail('  控制台仍读 artifact.state（接口给的是 status）—— 状态列与弹窗初始值都会错')
+    : ok('  控制台读 artifact.status（与接口一致）')
+  httpSource3.includes('artifact.status, artifact.owner')
+    ? ok('  服务端按状态检索也用 status')
+    : fail('  服务端检索仍读 artifact.state —— 按状态搜永远搜不到')
+  // And every version must be reachable, not just the row's own.
+  consoleSource4.includes('artifact.versions')
+    ? ok('  改状态弹窗可以选具体版本（非最高版本也能改）')
+    : fail('  只能改行上显示的那个版本 —— 其它版本仍然改不到')
+}
+
+/**
  * SKILL support.
  *
  * Skills are not loader entries: they are catalog items the agent reads on demand. So an

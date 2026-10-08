@@ -55,6 +55,7 @@ const SUITES = [
   ['zip 发布', 'probe-zip-publish.mjs', []],
   ['技能免 manifest', 'probe-skill-synthesis.mjs', []],
   ['目录筛选分页', 'probe-catalog-paging.mjs', []],
+  ['撤回可见性', 'probe-revoked-visibility.mjs', []],
   // Needs a real browser; it reports SKIPPED rather than pretending to pass.
   ['安装页界面', 'probe-market-ui.mjs', []],
 ]
