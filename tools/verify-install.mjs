@@ -304,6 +304,57 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     }
 
     /**
+     * The kind tabs, paging, and the fact that SEARCH went to the service.
+     *
+     * The tabs only work because the filter is applied server-side. While the whole catalog
+     * arrived in one response, filtering in the browser was equivalent; with pages it searches
+     * just the page on screen and reports "no match" for entries that are on another page.
+     */
+    for (const kind of ['all', 'plugin', 'skill']) {
+      market.includes(`data-kind="${kind}"`)
+        ? ok(`install page has the ${kind} tab`)
+        : fail(`install page has no ${kind} tab`)
+    }
+    market.includes('MarketShell.makePager')
+      ? ok('install page pages the catalog through the shared pager')
+      : fail('install page has no pager — results are not paginated')
+    market.includes("params.set('q'") || market.includes('set(\'q\'')
+      ? ok('install page sends the search term to the service')
+      : fail('install page still filters the loaded page — search would miss other pages')
+    if (/addEventListener\('input', \(\) => \{ if \(catalog\) renderGrid\(\) \}\)/.test(market)) {
+      fail('install page still re-renders locally on input instead of re-querying')
+    } else {
+      ok('search re-queries rather than re-rendering the loaded page')
+    }
+    // The card has to SAY which it is: the two install differently.
+    /tag\(kind === 'skill' \? '技能' : '插件'/.test(market)
+      ? ok('cards label 技能 / 插件')
+      : fail('cards do not say whether the entry is a skill or a plugin')
+    // The note claimed a filter that the catalog has never applied.
+    if (market.includes('只显示你的权限组被授权的条目')) {
+      fail('install page still claims it only shows authorized entries — it lists all, annotated')
+    } else {
+      ok('install page describes the catalog as it actually behaves')
+    }
+
+    /**
+     * `global` must not appear bare in this page.
+     *
+     * It exists only as the IIFE parameter inside `shared.js`. At the top level of this
+     * page's script it is UNDEFINED, so `global.setTimeout(...)` threw on the first keystroke
+     * — searching did nothing, silently — and `global.localStorage` threw inside the
+     * auto-login path, AFTER the token was set and before `setMe`, breaking auto-login on any
+     * machine that had a binding secret. A browser found both; a source-level grep is what
+     * stops the next one, because neither produced an error the user could see.
+     */
+    const bareGlobal = /(?<!globalThis)(?<![\w.$])global\s*\.\s*[A-Za-z_$]/.exec(market)
+    if (bareGlobal === null) {
+      ok('install page uses globalThis, not the undefined bare `global`')
+    } else {
+      fail(`install page uses bare \`global\` (${bareGlobal[0].trim()}) — that is undefined in a browser page and throws at runtime`)
+    }
+
+    /**
      * Unbinding is the USER'S action, not an administrator's.
      *
      * The operator's rule. The first implementation locked it to administrators — and

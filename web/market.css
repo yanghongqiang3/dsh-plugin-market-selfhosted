@@ -73,6 +73,28 @@
   .tag-warn{color:var(--warn);border-color:var(--warn)}
   .tag-error{color:var(--error);border-color:var(--error)}
   .tag-ok{color:var(--success);border-color:var(--success)}
+  /**
+   * The kind badge.
+   *
+   * Deliberately the FIRST tag on the card and visually distinct, because it changes what
+   * installing means: a plugin is mounted by the loader and needs a restart, a skill goes
+   * into the agent's catalog and takes effect within seconds.
+   */
+  .tag-kind-plugin{color:var(--label2)}
+  .tag-kind-skill{color:var(--brand);border-color:var(--brand)}
+  /**
+   * Tabs.
+   *
+   * `margin-right:auto` pushes the search box and the count to the right of the bar, so the
+   * tabs read as a separate control rather than as three more items in a row.
+   */
+  .tabs{display:flex;gap:2px;margin-right:auto;border:1px solid var(--border1);
+        border-radius:8px;padding:2px;background:var(--layer2)}
+  .tab{border:0;background:transparent;color:var(--label2);cursor:pointer;
+       font:inherit;font-size:12px;padding:4px 12px;border-radius:6px}
+  .tab:hover{color:var(--label)}
+  .tab.is-on{background:var(--layer1);color:var(--label);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
   .actions{display:flex;gap:8px;margin-top:auto;padding-top:4px}
   .status{margin-top:18px;color:var(--label2);font-size:12px;line-height:1.7;
           border-top:1px solid var(--border1);padding-top:12px;white-space:pre-wrap}

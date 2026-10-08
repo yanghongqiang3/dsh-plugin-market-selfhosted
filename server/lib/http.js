@@ -133,7 +133,12 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     userAgent: req.headers['user-agent'] ?? null,
   })
 
-  /** Catalog entries the caller may act on, each annotated with why or why not. */
+  /**
+   * Catalog entries the caller may act on, each annotated with why or why not.
+   *
+   * `kind` is carried through so the client can label and filter: without it a skill and a
+   * plugin are indistinguishable in the card list.
+   */
   const annotatedCatalog = (caller) =>
     artifacts.catalogRows().map((artifact) => {
       const verdict = evaluate(store, caller, artifact)
@@ -142,6 +147,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         version: artifact.version,
         channel: artifact.channel,
         status: artifact.status,
+        kind: artifact.kind ?? 'plugin',
         owner: artifact.owner,
         summary: artifact.summary,
         dsh: artifact.dsh,
@@ -153,6 +159,20 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         reason: verdict.code ?? null,
       }
     })
+
+  /**
+   * The two buckets the client offers.
+   *
+   * A bundle counts as a PLUGIN, not as a third tab: it is a package the loader mounts, and
+   * to someone installing it the distinction from a plain plugin is invisible. The three
+   * stored kinds therefore map to two tabs, and `counts` reports the mapping so the labels
+   * cannot drift from what the filter actually does.
+   */
+  const KIND_FILTERS = {
+    all: () => true,
+    plugin: (entry) => entry.kind !== 'skill',
+    skill: (entry) => entry.kind === 'skill',
+  }
 
   // --------------------------------------------------------------------- auth
 
@@ -239,13 +259,55 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
 
   // -------------------------------------------------------------- marketplace
 
-  route('GET', '/dsh-market/catalog', (req, res, caller) => {
+  route('GET', '/dsh-market/catalog', (req, res, caller, url) => {
+    const allowed = annotatedCatalog(caller)
+    const kind = String(url?.searchParams?.get('kind') ?? 'all').toLowerCase()
+    const filter = KIND_FILTERS[kind] ?? KIND_FILTERS.all
+    const q = String(url?.searchParams?.get('q') ?? '').trim().toLowerCase()
+
+    /**
+     * Search is applied HERE, not in the browser.
+     *
+     * The page used to filter whatever it had already loaded, which is only correct while
+     * the whole catalog arrives in one response. The moment results are paged, a client-side
+     * filter searches the current page and silently reports "no match" for entries that are
+     * simply on another page.
+     */
+    const matched = allowed.filter((entry) => {
+      if (!filter(entry)) return false
+      if (q === '') return true
+      return [entry.name, entry.summary, entry.owner].some(
+        (value) => typeof value === 'string' && value.toLowerCase().includes(q),
+      )
+    })
+
+    // Counts come from the kind filter only — they label the tabs, so they must not change
+    // when the user types in the search box.
+    const byKind = allowed.filter(filter)
+    const counts = {
+      all: allowed.length,
+      plugin: allowed.filter(KIND_FILTERS.plugin).length,
+      skill: allowed.filter(KIND_FILTERS.skill).length,
+      matched: byKind.length,
+    }
+
+    // `paginate(rows, limit, offset)` takes POSITIONAL arguments, while `pageParams` returns
+    // a `{ limit, offset, q }` object. Passing the object as `limit` silently fell back to
+    // the default page size — every page looked right and no page was ever the one asked for.
+    const { limit, offset } = pageParams(url)
+    const page = paginate(matched, limit, offset)
     json(res, 200, {
       ok: true,
       service: 'remote',
       user: publicUser(store, caller.user),
       groups: store.groupsOf(caller.user.username).map((group) => group.id),
-      entries: annotatedCatalog(caller),
+      kind: KIND_FILTERS[kind] === undefined ? 'all' : kind,
+      q: url?.searchParams?.get('q') ?? '',
+      counts,
+      entries: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
     })
   })
 

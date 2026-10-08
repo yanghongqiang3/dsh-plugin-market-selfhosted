@@ -70,10 +70,24 @@
     <div class="bindbar" id="binding"></div>
 
     <div class="bar">
-      <input type="search" id="query" placeholder="搜索插件名 / 摘要 / 归属团队" />
+      <!--
+        Three tabs over TWO stored buckets.
+
+        A bundle counts as a plugin: it is a package the loader mounts, and the difference
+        from a plain plugin is invisible to whoever is installing it. The counts come from
+        the service rather than being computed here, so a tab label cannot drift from what
+        its filter actually does.
+      -->
+      <div class="tabs" id="kind-tabs">
+        <button class="tab is-on" data-kind="all">全部</button>
+        <button class="tab" data-kind="plugin">插件</button>
+        <button class="tab" data-kind="skill">技能</button>
+      </div>
+      <input type="search" id="query" placeholder="搜索名称 / 摘要 / 归属团队" />
       <span class="meta" id="count"></span>
     </div>
     <div class="grid" id="grid"></div>
+    <div class="pager" id="pager"></div>
     <div class="status" id="status"></div>
   </section>
 </main>
@@ -97,6 +111,26 @@ const installedMap = new Map()
 let dshIdentity = { source: 'none', userId: null, name: null, deviceId: null, reason: null }
 /** The binding the service reports for the signed-in market account. */
 let binding = null
+/**
+ * Which tab is selected: `all` | `plugin` | `skill`.
+ *
+ * `plugin` is a BUCKET, not a stored kind — it covers `plugin` and `bundle`, because a
+ * bundle is just a plugin package that also carries a patch layer. Two tabs over three
+ * kinds is deliberate; see the catalog route.
+ */
+let activeKind = 'all'
+
+/**
+ * Server-side paging for the catalog.
+ *
+ * Created before first use because the tab handlers and the search box both call it. The
+ * shell owns the arithmetic; this page only re-fetches whenever it says the page changed.
+ */
+const pagerCatalog = MarketShell.makePager({
+  mount: 'pager',
+  pageSize: 10,
+  onChange: () => { void loadCatalog() },
+})
 /**
  * Whether THIS device holds a binding secret, i.e. whether auto-login is armed.
  *
@@ -135,7 +169,15 @@ function renderNote() {
     `已登录：${catalog.user?.displayName ?? catalog.user?.username}　权限组：${(catalog.groups || []).join('、') || '无组'}\n` +
     `${bindLine}\n` +
     `本机 profile：${state.profileDir ?? '(未知)'}\n` +
-    '只显示你的权限组被授权的条目（默认拒绝，deny 优先）。下载与判定在服务端，落盘在本机。\n' +
+    /**
+     * This used to claim 「只显示你的权限组被授权的条目」, which is not what happens and never
+     * was: the service lists EVERY artifact and annotates each with whether you may install
+     * it, so a card you cannot install appears with its reason. That is deliberate — you
+     * cannot ask for access to something you cannot see. The sentence was the defect; the
+     * behaviour is asserted in test-server.mjs and probe-grant-flow.mjs.
+     */
+    '列出服务端的全部条目，每条标注你能否安装（默认拒绝，deny 优先）；不能装的会写明原因。\n' +
+    '下载与判定在服务端，落盘在本机。\n' +
     `账号、权限、发布由管理员在服务端控制台处理：${consoleUrl}`
 }
 
@@ -157,6 +199,15 @@ function cardOf(entry) {
 
   const meta = document.createElement('div')
   meta.className = 'meta'
+  /**
+   * Say WHAT it is, first, before version and owner.
+   *
+   * A skill and a plugin install completely differently — one is mounted by the loader, the
+   * other is catalog instructions the agent reads — and the name alone does not always tell
+   * you which. `plugin` also covers bundles, which is the same bucket the 插件 tab uses.
+   */
+  const kind = entry.kind ?? 'plugin'
+  meta.appendChild(tag(kind === 'skill' ? '技能' : '插件', kind === 'skill' ? 'tag-kind-skill' : 'tag-kind-plugin'))
   meta.appendChild(document.createTextNode('v' + (entry.version || '?')))
   if (entry.channel) meta.appendChild(tag(entry.channel))
   if (entry.owner) meta.appendChild(tag(entry.owner))
@@ -219,25 +270,41 @@ function cardOf(entry) {
 
 function renderGrid() {
   const grid = $('grid')
-  const query = $('query').value.trim().toLowerCase()
   grid.textContent = ''
-  const entries = (catalog?.entries ?? []).filter((entry) => {
-    if (!query) return true
-    return [entry.name, entry.summary, entry.owner].some(
-      (value) => typeof value === 'string' && value.toLowerCase().includes(query),
-    )
-  })
-  $('count').textContent = `${entries.length} / ${(catalog?.entries ?? []).length} 个条目`
+  // The FILTERING is the service's now — see the catalog route. This used to filter
+  // whatever had been loaded, which is only the same thing while everything arrives in one
+  // response; with paging it would search the current page and report "no match" for
+  // entries that are merely on another page.
+  const entries = catalog?.entries ?? []
+  const { total, counts } = { total: catalog?.total ?? 0, counts: catalog?.counts ?? {} }
+  const tabs = { all: '全部', plugin: '插件', skill: '技能' }
+  const q = $('query').value.trim()
+  $('count').textContent = q === ''
+    ? `${total} / ${counts.all ?? total} 个条目`
+    : `${total} / ${counts.matched ?? total} 个匹配`
+  for (const button of $('kind-tabs').children) {
+    const kind = button.dataset.kind
+    const n = counts[kind]
+    button.textContent = typeof n === 'number' ? `${tabs[kind]} ${n}` : tabs[kind]
+    button.classList.toggle('is-on', kind === activeKind)
+  }
   if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = (catalog?.entries ?? []).length === 0
-      ? '没有可用条目。可能是你的权限组还没有被授予任何插件规则，请联系管理员。'
+    empty.textContent = (counts[kindOfActive()] ?? 0) === 0
+      ? activeKind === 'skill'
+        ? '还没有可用的技能。'
+        : '没有可用条目。可能是你的权限组还没有被授予任何插件规则，请联系管理员。'
       : '没有匹配的条目。'
     grid.appendChild(empty)
     return
   }
   for (const entry of entries) grid.appendChild(cardOf(entry))
+}
+
+/** The bucket a tab maps to; `plugin` covers bundles too. */
+function kindOfActive() {
+  return activeKind
 }
 
 // ------------------------------------------------------------------ 加载数据
@@ -276,15 +343,29 @@ async function loadCatalog() {
   status('')
   $('note').textContent = '加载中…'
   try {
-    const result = await service('/dsh-market/catalog')
+    // `params` is a GETTER on the pager object, not a method — the same shape the admin
+    // console reads via `pager[listName].params.limit`.
+    const params = new URLSearchParams({ kind: activeKind, ...pagerCatalog.params })
+    const q = $('query').value.trim()
+    if (q !== '') params.set('q', q)
+    const result = await service(`/dsh-market/catalog?${params}`)
     if (!result.ok) {
       $('note').textContent = result.body?.detail || result.body?.code || `加载失败（HTTP ${result.status}）`
       return
     }
+    // The service reports the page, the total AND the tab counts, so the labels and the
+    // pager come from one source of truth rather than being recomputed (and drifting) here.
     catalog = result.body
+    pagerCatalog.setTotal(catalog.total ?? 0)
     renderNote()
     renderGrid()
   } catch { /* request() switched views */ }
+}
+
+/** Reload from the first page — for a tab switch or a new search. */
+async function reloadCatalog() {
+  pagerCatalog.reset()
+  await loadCatalog()
 }
 
 async function doInstall(entry, button) {
@@ -451,7 +532,10 @@ async function tryAutoLogin() {
   S.token.set(session.token)
   // Same key shared.js uses; the refresh token must be stored here too or the session
   // would still expire after two hours.
-  if (session.refresh) global.localStorage.setItem('dsh.market.refresh', session.refresh)
+  // `global` exists only as the IIFE parameter inside shared.js. At this script's top
+  // level it is UNDEFINED, so `global.localStorage` threw — after the token was set and
+  // BEFORE setMe, which is why auto-login broke on a machine that had a binding secret.
+  if (session.refresh) globalThis.localStorage.setItem('dsh.market.refresh', session.refresh)
   if (session.user) S.setMe(session.user)
   return true
 }
@@ -647,7 +731,28 @@ $('login-pass').addEventListener('keydown', (event) => { if (event.key === 'Ente
 $('pw-submit').addEventListener('click', S.doChangePassword)
 $('logout').addEventListener('click', S.doLogout)
 $('refresh').addEventListener('click', () => { status(''); refreshCatalog() })
-$('query').addEventListener('input', () => { if (catalog) renderGrid() })
+/**
+ * A tab switch or a new search restarts at page 1.
+ *
+ * Keeping the old offset would show an empty page whenever the new result set is shorter —
+ * the same trap the admin lists avoid by resetting on search.
+ */
+for (const button of $('kind-tabs').children) {
+  button.addEventListener('click', async () => {
+    if (button.dataset.kind === activeKind) return
+    activeKind = button.dataset.kind
+    await reloadCatalog()
+  })
+}
+// Search goes to the SERVICE, debounced: it has to search the whole catalog, not the page
+// currently on screen. 220ms matches the admin console so the two feel the same.
+let searchTimer = null
+$('query').addEventListener('input', () => {
+  // Same mistake here: this threw on the first keystroke, so the debounced reload never
+  // ran and searching did nothing at all — silently, with no error on screen.
+  if (searchTimer !== null) globalThis.clearTimeout(searchTimer)
+  searchTimer = globalThis.setTimeout(() => { void reloadCatalog() }, 220)
+})
 $('noService-retry').addEventListener('click', () => location.reload())
 
 S.init({

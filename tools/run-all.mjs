@@ -52,6 +52,9 @@ const SUITES = [
   ['自动登录', 'probe-autologin.mjs', []],
   ['技能安装', 'probe-skill-install.mjs', []],
   ['制品类型', 'probe-artifact-kind.mjs', []],
+  ['目录筛选分页', 'probe-catalog-paging.mjs', []],
+  // Needs a real browser; it reports SKIPPED rather than pretending to pass.
+  ['安装页界面', 'probe-market-ui.mjs', []],
 ]
 
 /** The last thing to run: it reads the installed profile rather than a scratch database. */
@@ -83,10 +86,16 @@ const runOne = (label, file, args) => {
   totalOk += ok
   totalFail += fail
 
+  /**
+   * A `RESULT` line alone is not enough — `RESULT: SKIPPED` has one too, and a suite that
+   * skipped its checks has not verified anything. Read what the line actually says.
+   */
+  const resultLine = (/^RESULT: (.*)$/m.exec(output) ?? [])[1] ?? ''
   let verdict = '通过'
   if (result.status !== 0) verdict = `崩溃(exit=${result.status})`
   else if (!hasResult) verdict = '没有 RESULT 行'
   else if (fail > 0) verdict = `${fail} 项失败`
+  else if (resultLine !== 'all checks passed') verdict = `未验证（${resultLine}）`
 
   if (verdict !== '通过') {
     broken.push(`${label} — ${verdict}`)
