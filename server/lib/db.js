@@ -142,6 +142,18 @@ function migrate(db) {
       value TEXT NOT NULL
     );
   `)
+
+  /**
+   * Additive migration for databases that already exist.
+   *
+   * `CREATE TABLE IF NOT EXISTS` does nothing to a table that is already there, so a new
+   * column needs an explicit ALTER. Guarded by `PRAGMA table_info` because SQLite has no
+   * `ADD COLUMN IF NOT EXISTS`, and this runs on every boot.
+   */
+  const columns = db.prepare('PRAGMA table_info(dsh_bindings)').all()
+  if (!columns.some((row) => row.name === 'secret_hash')) {
+    db.exec('ALTER TABLE dsh_bindings ADD COLUMN secret_hash TEXT')
+  }
 }
 
 /** Rows -> plain objects with the field names the HTTP layer speaks. */

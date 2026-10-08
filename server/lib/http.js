@@ -199,6 +199,28 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
   })
 
   // Not behind the password gate: this is the one route a first-login user must reach.
+  /**
+   * Exchange a refresh token for a new session.
+   *
+   * `auth: 'none'` because the refresh token IS the credential here — requiring a valid
+   * session would defeat the point, since the session is exactly what has expired.
+   */
+  route('POST', '/dsh-market/auth/refresh', async (req, res) => {
+    const body = await readBody(req)
+    const result = store.redeemRefresh(body?.refresh, clientInfo(req))
+    if (!result.ok) {
+      json(res, 401, { ok: false, code: result.code, detail: '刷新令牌无效或已过期，请重新登录' })
+      return
+    }
+    json(res, 200, {
+      ok: true,
+      token: result.token,
+      refresh: result.refresh,
+      expiresIn: result.expiresIn,
+      user: publicUser(store, result.user),
+    })
+  }, { auth: 'none' })
+
   route('POST', '/dsh-market/auth/password', async (req, res) => {
     const caller = store.resolveSession(tokenOf(req))
     if (!caller) {
@@ -860,6 +882,37 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     json(res, 200, { ok: true, bound: binding !== null })
   }, { auth: 'none' })
 
+  /**
+   * Exchange a BINDING SECRET for a session — the auto-login path.
+   *
+   * Called by the DSH host plugin, which holds the secret in the profile and never hands
+   * it to the browser. `auth: 'none'` because the secret IS the credential.
+   *
+   * Deliberately NOT "log in with a DSH account id". The id is not a secret: the plugin's
+   * `/dsh-market/identity` route reflects any Origin, so any website the user visits can
+   * read it. Making it sufficient for a session would let any website take over the bound
+   * market account. The id here is only a lookup key; the secret is verified.
+   */
+  route('POST', '/dsh-market/identity/token', async (req, res) => {
+    const body = await readBody(req)
+    const result = store.redeemBinding({
+      dshUserId: body?.dshUserId,
+      secret: body?.secret,
+      ...clientInfo(req),
+    })
+    if (!result.ok) {
+      json(res, 401, { ok: false, code: result.code, detail: result.detail ?? '绑定密钥无效' })
+      return
+    }
+    json(res, 200, {
+      ok: true,
+      token: result.token,
+      refresh: result.refresh,
+      expiresIn: result.expiresIn,
+      user: publicUser(store, result.user),
+    })
+  }, { auth: 'none' })
+
   route('POST', '/dsh-market/identity/bind', async (req, res, caller) => {
     const body = await readBody(req)
     const result = store.bindDshAccount({
@@ -875,7 +928,19 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       json(res, status, { ok: false, code: result.code, detail: result.detail ?? null })
       return
     }
-    json(res, 200, { ok: true, unchanged: result.unchanged === true, binding: result.binding })
+    /**
+     * The binding secret is returned HERE and only here — this is the one moment it
+     * exists in plaintext. The page hands it straight to the DSH host plugin, which keeps
+     * it in the profile; the service keeps only its hash.
+     *
+     * `bindingRow` deliberately does NOT carry it, so no read route can leak it.
+     */
+    json(res, 200, {
+      ok: true,
+      unchanged: result.unchanged === true,
+      binding: result.binding,
+      secret: result.secret,
+    })
   })
 
   route('GET', '/dsh-market/identity/me', (req, res, caller) => {

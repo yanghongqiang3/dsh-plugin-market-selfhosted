@@ -481,6 +481,52 @@ export class Store {
     return { ok: true, user: this.findUser(username) }
   }
 
+  /**
+   * Redeem a refresh token for a new session, rotating both tokens.
+   *
+   * The refresh token was issued from the first day and stored (`refresh_hash`,
+   * `refresh_expires_at`) but NOTHING ever redeemed it, so a session simply died after
+   * two hours and the user logged in again. The seven-day refresh window existed on paper
+   * only.
+   *
+   * Rotation, not reuse: the row's token and refresh are both replaced. A leaked refresh
+   * token is therefore good for exactly one exchange, and the legitimate holder's next
+   * call fails loudly rather than both parties silently sharing a session.
+   */
+  redeemRefresh(refreshToken, context = {}) {
+    if (!refreshToken) return { ok: false, code: 'E_NO_REFRESH' }
+    const row = this.db
+      .prepare('SELECT * FROM sessions WHERE refresh_hash = ?')
+      .get(hashToken(String(refreshToken)))
+    if (!row) return { ok: false, code: 'E_NO_SESSION' }
+    if (row.revoked_at !== null) return { ok: false, code: 'E_SESSION_REVOKED' }
+    if (row.refresh_expires_at < Date.now()) return { ok: false, code: 'E_REFRESH_EXPIRED' }
+    const user = this.findUserById(row.user_id)
+    if (!user || user.status !== 'active') return { ok: false, code: 'E_USER_INACTIVE' }
+
+    const token = newToken()
+    const refresh = newToken()
+    const now = Date.now()
+    this.db
+      .prepare(
+        `UPDATE sessions SET token_hash = ?, refresh_hash = ?, issued_at = ?, expires_at = ?,
+                             refresh_expires_at = ?, ip = ?, user_agent = ?
+         WHERE id = ?`,
+      )
+      .run(
+        hashToken(token),
+        hashToken(refresh),
+        now,
+        now + SESSION_TTL_MS,
+        now + REFRESH_TTL_MS,
+        context.ip ?? row.ip,
+        context.userAgent ?? row.user_agent,
+        row.id,
+      )
+    this.audit('session.refresh', { username: user.username }, user.username)
+    return { ok: true, token, refresh, expiresIn: SESSION_TTL_MS / 1000, user }
+  }
+
   // ------------------------------------------------------------ dsh bindings
 
   /** One row -> the shape the HTTP layer speaks. */
@@ -552,12 +598,26 @@ export class Store {
     const byDsh = this.bindingForDsh(dshId)
     const byMarket = this.bindingForMarket(market)
 
+    /**
+     * The binding secret.
+     *
+     * This is what makes auto-login possible WITHOUT treating the DSH account id as a
+     * credential. Verified on this machine: `/dsh-market/identity` reflects any Origin, so
+     * ANY website the user visits can read their DSH account id. If that id were enough to
+     * obtain a session, every website could take over the bound market account.
+     *
+     * The secret is a real credential: random, stored only as a hash here, handed out
+     * exactly once, and rotated on every (re)bind so an old one dies with its binding.
+     */
+    const secret = newToken()
+
     if (byDsh && byMarket && byDsh.dshUserId === byMarket.dshUserId) {
-      // Already exactly this pair: refresh the display hint and report success.
+      // Already exactly this pair. Rotate the secret rather than leaving the old one live:
+      // re-binding is an explicit act, and the caller is about to store the new value.
       this.db
-        .prepare('UPDATE dsh_bindings SET dsh_name = ?, device_id = ? WHERE dsh_user_id = ?')
-        .run(String(dshName ?? ''), deviceId ?? null, dshId)
-      return { ok: true, unchanged: true, binding: this.bindingForDsh(dshId) }
+        .prepare('UPDATE dsh_bindings SET dsh_name = ?, device_id = ?, secret_hash = ? WHERE dsh_user_id = ?')
+        .run(String(dshName ?? ''), deviceId ?? null, hashToken(secret), dshId)
+      return { ok: true, unchanged: true, secret, binding: this.bindingForDsh(dshId) }
     }
     if (byDsh) {
       return { ok: false, code: 'E_DSH_ALREADY_BOUND', detail: byDsh.marketUsername, binding: byDsh }
@@ -568,12 +628,39 @@ export class Store {
 
     this.db
       .prepare(
-        `INSERT INTO dsh_bindings (dsh_user_id, market_username, dsh_name, device_id, bound_at, bound_by, bound_ip)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO dsh_bindings (dsh_user_id, market_username, dsh_name, device_id, bound_at, bound_by, bound_ip, secret_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(dshId, market, String(dshName ?? ''), deviceId ?? null, Date.now(), by, ip)
+      .run(dshId, market, String(dshName ?? ''), deviceId ?? null, Date.now(), by, ip, hashToken(secret))
     this.audit('dsh.bind', { dshUserId: dshId, marketUsername: market, by }, by)
-    return { ok: true, binding: this.bindingForDsh(dshId) }
+    return { ok: true, secret, binding: this.bindingForDsh(dshId) }
+  }
+
+  /**
+   * Exchange a binding secret for a session, the way a browser would after a login.
+   *
+   * Called by the DSH HOST PLUGIN, not by the page: the plugin holds the secret in the
+   * profile, so it never reaches the browser. The DSH account id in the request is only a
+   * lookup key — the secret is what is verified.
+   */
+  redeemBinding({ dshUserId, secret, ip = null, userAgent = null }) {
+    const dshId = String(dshUserId ?? '').trim()
+    if (!dshId || !secret) return { ok: false, code: 'E_BAD_REQUEST' }
+    const row = this.db.prepare('SELECT * FROM dsh_bindings WHERE dsh_user_id = ?').get(dshId)
+    if (!row) return { ok: false, code: 'E_NOT_BOUND' }
+    if (!row.secret_hash) {
+      // Bound before secrets existed: the user re-binds (or an admin does) to get one.
+      return { ok: false, code: 'E_NO_SECRET', detail: '这条绑定没有密钥，需要重新绑定' }
+    }
+    if (row.secret_hash !== hashToken(String(secret))) {
+      this.audit('dsh.redeem', { dshUserId: dshId, result: 'bad-secret' })
+      return { ok: false, code: 'E_BAD_SECRET' }
+    }
+    const user = this.findUser(row.market_username)
+    if (!user || user.status !== 'active') return { ok: false, code: 'E_USER_INACTIVE' }
+    const issued = this.issueSession(user, { ip, userAgent })
+    this.audit('dsh.redeem', { dshUserId: dshId, username: user.username, result: 'ok' }, user.username)
+    return { ok: true, ...issued, user, refresh: issued.refresh }
   }
 
   /**

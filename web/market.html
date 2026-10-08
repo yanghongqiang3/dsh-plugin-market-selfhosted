@@ -387,9 +387,64 @@ async function bindIdentity() {
   })
   if (result.ok) {
     binding = result.body?.binding ?? null
+    await saveLinkSecret(result.body?.secret)
     return { ok: true, unchanged: result.body?.unchanged === true }
   }
   return { ok: false, code: result.body?.code, detail: result.body?.detail }
+}
+
+/**
+ * Hand the binding secret to the DSH host plugin, which keeps it in the profile.
+ *
+ * It goes to the PLUGIN, not to localStorage: the plugin performs the exchange later, so
+ * a script on this page never needs to hold the credential. The service returns it exactly
+ * once — here.
+ */
+async function saveLinkSecret(secret) {
+  if (!secret || !dshIdentity.userId) return
+  try {
+    await local('/dsh-market/link', {
+      method: 'POST',
+      body: { dshUserId: dshIdentity.userId, secret, marketUsername: state.me?.username ?? null },
+    })
+  } catch {
+    // Not fatal: the binding stands, the user just does not get auto-login next time.
+    status('已绑定，但本机未能保存自动登录凭据（下次仍需手动登录）。', true)
+  }
+}
+
+/** Forget the local secret, so a released binding cannot be renewed. */
+async function dropLinkSecret() {
+  try {
+    await local('/dsh-market/link', { method: 'POST', body: { clear: true } })
+  } catch {
+    /* the service side is already unbound; a stale local file is inert without it */
+  }
+}
+
+/**
+ * Ask the plugin for a session using the stored secret — this is the auto-login.
+ *
+ * The DSH account is signed in and bound, so the user should not have to type a market
+ * password on this machine again. The PLUGIN does the exchange, so the credential never
+ * reaches this page.
+ */
+async function tryAutoLogin() {
+  if (dshIdentity.source !== 'account') return false
+  let result
+  try {
+    result = await local('/dsh-market/session')
+  } catch {
+    return false
+  }
+  const session = result?.body?.session
+  if (!result?.ok || !session?.token) return false
+  S.token.set(session.token)
+  // Same key shared.js uses; the refresh token must be stored here too or the session
+  // would still expire after two hours.
+  if (session.refresh) global.localStorage.setItem('dsh.market.refresh', session.refresh)
+  if (session.user) S.setMe(session.user)
+  return true
 }
 
 /** Ask the service whether this DSH account already holds a slot. */
@@ -492,6 +547,9 @@ async function doUnbind() {
     if (!result.ok) {
       status(`解绑失败：${result.body?.detail || result.body?.code || '未知原因'}`, true)
     } else {
+      // Drop the local secret too: leaving it would let the next page load silently sign
+      // back in as an account that is no longer bound.
+      await dropLinkSecret()
       status('已解绑。')
     }
   } catch (error) {
@@ -560,9 +618,17 @@ $('noService-retry').addEventListener('click', () => location.reload())
 
 S.init({
   views: ['noService', 'login', 'password', 'market'],
-  // Read the DSH identity BEFORE anything else: the post-login binding needs it, and
-  // on a reload with a stored token `enter()` would otherwise run first.
-  beforeBoot: loadDshIdentity,
+  /**
+   * Read the DSH identity first, then try auto-login.
+   *
+   * Order matters: auto-login needs the identity to decide whether this machine even has a
+   * DSH account. Doing it in `beforeBoot` also means a returning user never sees the login
+   * screen flash before being signed in.
+   */
+  beforeBoot: async () => {
+    await loadDshIdentity()
+    await tryAutoLogin()
+  },
   onView: (view) => {
     $('refresh').classList.toggle('hidden', view !== 'market')
     $('logout').classList.toggle('hidden', view !== 'market')

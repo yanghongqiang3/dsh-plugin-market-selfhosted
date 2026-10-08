@@ -246,10 +246,19 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     market.includes('/dsh-market/identity/bind')
       ? ok('install page can bind the DSH account')
       : fail('install page never binds the DSH account')
-    // The service sends the market side; a body field would let a caller claim another
-    // account, so the payload must not carry one.
-    if (/marketUsername/.test(market)) {
-      fail('install page sends marketUsername in the bind body — the market side must come from the token only')
+    /**
+     * The market side of a binding comes from the TOKEN, never from a body field.
+     *
+     * Scoped to the bind CALL, not the whole page. The page also posts a `marketUsername`
+     * to the local plugin's `/dsh-market/link` route — a label for the stored secret, with
+     * no authority — and matching the whole file flagged that as a bypass. The assertion
+     * is about what `/identity/bind` receives.
+     */
+    const bindBlock = /async function bindIdentity\(\)[\s\S]*?\n\}/.exec(market)?.[0] ?? ''
+    if (bindBlock === '') {
+      fail('could not find the bindIdentity block in the install page')
+    } else if (/marketUsername/.test(bindBlock)) {
+      fail('install page sends marketUsername to /identity/bind — the market side must come from the token only')
     } else {
       ok('install page does not send a market account in the bind body')
     }
@@ -808,6 +817,81 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   artifactsSource.includes('$selfDir') || artifactsSource.includes('this.selfDir')
     ? ok('自身包存放在 artifacts 表之外')
     : fail('自身包混进了市场制品存储')
+}
+
+/**
+ * Auto-login, and the security property that makes it safe.
+ *
+ * The tempting shortcut is "the plugin knows the DSH account id, so let it log in". That
+ * would be an authentication bypass, and it is worth writing down WHY, because the reason
+ * is measured rather than theoretical: the plugin's `/dsh-market/identity` route reflects
+ * any Origin, so ANY website the user visits can read that id. The id is a lookup key, not
+ * a credential; the binding secret is the credential.
+ */
+{
+  const httpSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  const storeSource2 = fs.readFileSync(path.join(dir, 'server', 'lib', 'store.js'), 'utf8')
+  const pluginSource2 = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+  const sharedSource2 = fs.readFileSync(path.join(dir, 'web', 'shared.js'), 'utf8')
+
+  httpSource.includes("'/dsh-market/identity/token'")
+    ? ok('服务端有绑定密钥换会话的路由')
+    : fail('服务端没有 /dsh-market/identity/token')
+  httpSource.includes("'/dsh-market/auth/refresh'")
+    ? ok('服务端能兑换 refresh 令牌')
+    : fail('服务端没有 /dsh-market/auth/refresh —— 会话两小时后只能重新登录')
+  // The secret must be single-issue: returned from bind, and from no read route.
+  storeSource2.includes('secret_hash') && storeSource2.includes('redeemBinding')
+    ? ok('store 保存密钥哈希并可校验')
+    : fail('store 没有密钥的保存/校验')
+  const bindingRow = /bindingRow\(row\)\s*\{[\s\S]*?\n  \}/.exec(storeSource2)?.[0] ?? ''
+  if (bindingRow === '') {
+    fail('找不到 bindingRow —— 无法确认读取接口不泄漏密钥')
+  } else if (bindingRow.includes('secret')) {
+    fail('bindingRow 返回了密钥 —— 任何读取接口都会泄漏它')
+  } else {
+    ok('bindingRow 不返回密钥（读取接口无法泄漏它）')
+  }
+
+  // The plugin holds the secret and refuses to hand out sessions to other origins.
+  for (const [label, needle] of [
+    ['写入密钥的路由', "`${PREFIX}/link`"],
+    ['交换会话的路由', "`${PREFIX}/session`"],
+  ]) {
+    pluginSource2.includes(needle) ? ok(`宿主插件有${label}`) : fail(`宿主插件没有${label}`)
+  }
+  pluginSource2.includes('function ownOrigin')
+    ? ok('宿主插件校验请求来源')
+    : fail('宿主插件没有 Origin 校验 —— 任何网站都能索取会话')
+  // Both sensitive routes must actually call the check, not merely define it.
+  const linkRoute = /`\$\{PREFIX\}\/link`[\s\S]*?\n  \],/.exec(pluginSource2)?.[0] ?? ''
+  const sessionRoute = /`\$\{PREFIX\}\/session`[\s\S]*?\n  \],/.exec(pluginSource2)?.[0] ?? ''
+  linkRoute.includes('ownOrigin(req)')
+    ? ok('  写密钥前校验来源')
+    : fail('  写密钥的路由没有校验来源')
+  sessionRoute.includes('ownOrigin(req)')
+    ? ok('  发会话前校验来源')
+    : fail('  发会话的路由没有校验来源')
+
+  // The client side must actually persist and redeem the refresh token.
+  sharedSource2.includes('REFRESH_KEY')
+    ? ok('页面保存 refresh 令牌')
+    : fail('页面没有保存 refresh 令牌 —— 服务端发了也没用')
+  sharedSource2.includes('/dsh-market/auth/refresh')
+    ? ok('页面在 401 时兑换 refresh')
+    : fail('页面不会兑换 refresh')
+  sharedSource2.includes('refreshToken.clear()')
+    ? ok('登出会清掉 refresh 令牌')
+    : fail('登出没有清 refresh —— 下一次请求会自动登回来')
+  const marketSource = fs.existsSync(path.join(dir, 'web', 'market.html'))
+    ? fs.readFileSync(path.join(dir, 'web', 'market.html'), 'utf8')
+    : ''
+  marketSource.includes('tryAutoLogin')
+    ? ok('安装页会尝试自动登录')
+    : fail('安装页不会自动登录')
+  marketSource.includes('/dsh-market/link')
+    ? ok('安装页把密钥交给宿主插件（而不是留给页面）')
+    : fail('安装页没有把密钥交给插件')
 }
 
 resolveSpec(PKG)

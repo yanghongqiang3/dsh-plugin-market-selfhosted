@@ -22,6 +22,8 @@
   const TOKEN_KEY = 'dsh.market.token'
   /** Which service the stored token belongs to — a token is not portable across services. */
   const SERVICE_KEY = 'dsh.market.service'
+/** Where the seven-day refresh token lives. Its hash is what the service keeps. */
+const REFRESH_KEY = 'dsh.market.refresh'
 
   /**
    * Reserve the window-control strip only when running inside the desktop shell.
@@ -40,6 +42,19 @@
     get: () => global.localStorage.getItem(TOKEN_KEY),
     set: (value) => global.localStorage.setItem(TOKEN_KEY, value),
     clear: () => global.localStorage.removeItem(TOKEN_KEY),
+  }
+
+  /**
+   * The refresh token, kept beside the session token.
+   *
+   * The service has always issued one (`refresh`, valid seven days) and stored its hash,
+   * but nothing on either side ever redeemed it — so a session simply died after two hours
+   * and the user signed in again. Keeping it here is what makes the seven-day window real.
+   */
+  const refreshToken = {
+    get: () => global.localStorage.getItem(REFRESH_KEY),
+    set: (value) => global.localStorage.setItem(REFRESH_KEY, value),
+    clear: () => global.localStorage.removeItem(REFRESH_KEY),
   }
 
   /**
@@ -94,7 +109,36 @@
     return request(path, options)
   }
 
-  async function request(url, options = {}) {
+  /**
+   * Exchange the stored refresh token for a fresh session.
+   *
+   * Returns true when the caller should retry. Clears both tokens on failure so a dead
+   * refresh cannot be retried forever.
+   */
+  async function renewSession() {
+    const stored = refreshToken.get()
+    if (!stored) return false
+    try {
+      const response = await fetch(`${state.serviceUrl}/dsh-market/auth/refresh`, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify({ refresh: stored }),
+      })
+      if (!response.ok) return false
+      const body = await response.json().catch(() => null)
+      if (!body?.token) return false
+      token.set(body.token)
+      // The service ROTATES the refresh token, so the old one is already dead — storing
+      // the new one is not optional.
+      if (body.refresh) refreshToken.set(body.refresh)
+      if (body.user) setMe(body.user)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function request(url, options = {}, retried = false) {
     const headers = { accept: 'application/json', ...(options.headers || {}) }
     if (options.body !== undefined) headers['content-type'] = 'application/json'
     if (options.auth !== false && token.get()) headers.authorization = `Bearer ${token.get()}`
@@ -117,8 +161,20 @@
     let body = null
     try { body = await response.json() } catch { body = null }
 
+    /**
+     * On 401, try the refresh token ONCE before giving up.
+     *
+     * Once, not repeatedly: a failed renewal clears both tokens, so a second attempt
+     * would loop. With no refresh token stored this behaves exactly as before and drops
+     * straight to the login screen.
+     */
+    if (response.status === 401 && !retried && options.auth !== false && refreshToken.get()) {
+      if (await renewSession()) return request(url, options, true)
+    }
+
     if (response.status === 401) {
       token.clear()
+      refreshToken.clear()
       state.me = null
       show('login')
       throw Object.assign(new Error('unauthenticated'), { code: 'E_NOT_LOGGED_IN', status: 401 })
@@ -152,6 +208,9 @@
       return
     }
     token.set(result.body.token)
+    // Kept so the session can be renewed for the next seven days instead of forcing a
+    // fresh login every two hours.
+    if (result.body.refresh) refreshToken.set(result.body.refresh)
     global.localStorage.setItem(SERVICE_KEY, state.serviceUrl ?? '')
     $('login-pass').value = ''
     setMe(result.body.user)
@@ -181,6 +240,9 @@
   async function doLogout() {
     try { await service('/dsh-market/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
     token.clear()
+    // Logging out must drop the refresh token too, or the next request would silently
+    // sign the user back in — a logout that does not log out.
+    refreshToken.clear()
     state.me = null
     setWho('')
     status('')
@@ -601,7 +663,11 @@
 
     // A token issued by a different service is meaningless here: drop it rather
     // than showing a confusing 401.
-    if (token.get() && global.localStorage.getItem(SERVICE_KEY) !== state.serviceUrl) token.clear()
+    if (token.get() && global.localStorage.getItem(SERVICE_KEY) !== state.serviceUrl) {
+      // A token from a DIFFERENT service is meaningless here, and so is its refresh token.
+      token.clear()
+      refreshToken.clear()
+    }
 
     // Say which service the login is for. Rendered here rather than after a
     // successful sign-in, so it is visible on the very screen that needs it.
