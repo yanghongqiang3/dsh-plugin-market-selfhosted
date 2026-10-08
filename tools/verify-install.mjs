@@ -235,9 +235,16 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
 
   const marketPath = path.join(dir, 'web', 'market.html')
   if (fs.existsSync(marketPath)) {
+    // Comments stripped for the binding checks too: several of these strings appear in
+    // the comments that explain them, and matching those produced false failures here
+    // before.
     const market = fs.readFileSync(marketPath, 'utf8')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+
     market.includes('/dsh-market/identity/bind')
-      ? ok('install page binds the DSH account on sign-in')
+      ? ok('install page can bind the DSH account')
       : fail('install page never binds the DSH account')
     // The service sends the market side; a body field would let a caller claim another
     // account, so the payload must not carry one.
@@ -253,7 +260,39 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     }
     market.includes('beforeBoot')
       ? ok('install page reads the DSH identity before the boot flow continues')
-      : fail('install page does not read the identity before boot — the binding could run without it')
+      : fail('install page does not read the identity before boot — the login screen could not name the account')
+
+    /**
+     * Binding is MANUAL, and that is a product decision worth protecting.
+     *
+     * The first version bound on sign-in, which claims a one-to-one slot without
+     * asking: a user who signs into the wrong market account silently consumes a
+     * binding, and only an administrator can release it. So the bind call must not be
+     * reachable from the sign-in path — only from an explicit click.
+     */
+    const authBlock = /S\.onAuthenticated\(async \(\) => \{[\s\S]*?\n\}\)/.exec(market)?.[0] ?? ''
+    if (authBlock === '') {
+      fail('could not find the S.onAuthenticated block in the install page')
+    } else if (/bindIdentity\(/.test(authBlock)) {
+      fail('the sign-in path still binds automatically — a one-to-one slot must not be claimed without a click')
+    } else {
+      ok('sign-in does not bind automatically')
+    }
+    /addEventListener\('click',\s*doBind\)/.test(market)
+      ? ok('an explicit click performs the binding')
+      : fail('no explicit bind action — the user could never bind')
+    // A button that always fails on a taken account is worse than one that says so.
+    // Written as an if: a bare regex as a ternary condition parses as division.
+    if (market.includes('/dsh-market/identity/lookup')) {
+      ok('install page checks the slot before offering the bind action')
+    } else {
+      fail('install page never asks /identity/lookup — a taken account would only fail after the click')
+    }
+    if (/id="binding"/.test(market)) {
+      ok('install page has a binding bar showing state and action')
+    } else {
+      fail('install page has no binding UI')
+    }
   }
 
   const consolePath2 = path.join(dir, 'web', 'console.html')

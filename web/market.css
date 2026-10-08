@@ -114,3 +114,16 @@
   .chip{border:1px solid var(--border2);border-radius:999px;padding:2px 9px;font-size:11px;
         cursor:pointer;background:var(--layer1);color:var(--label2)}
   .chip.on{border-color:var(--brand);color:var(--brand);background:var(--layer2)}
+
+/**
+ * The DSH-account binding bar.
+ *
+ * A quiet strip above the catalog: it states the current binding and offers the one
+ * action that changes it. It is not a warning — an unbound account installs exactly
+ * the same as a bound one — so it uses the secondary ink and a subtle border rather
+ * than a brand or error treatment.
+ */
+.bindbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+         padding:8px 12px;margin:0 0 12px;border:1px solid var(--border1);border-radius:8px;
+         background:var(--layer1)}
+.bindbar .meta{white-space:pre-line;margin-right:auto}

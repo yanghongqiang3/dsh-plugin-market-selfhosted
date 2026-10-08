@@ -2,9 +2,27 @@
 #
 # The .bat file MUST be CRLF: cmd.exe mis-parses LF-only batch files. Everything
 # else is LF, so a Linux/CI checkout behaves the same as a Windows one.
+#
+# WHAT THIS DOES NOT GUARANTEE — worth knowing before chasing it again:
+#
+#   `text=auto` marks the file as text and normalizes it to LF IN THE REPOSITORY.
+#   On checkout, a local `core.autocrlf=true` still converts the WORKING COPY to
+#   CRLF. Verified on this machine: `git config --get core.autocrlf` returns true,
+#   `git check-attr text eol -- .gitignore` reports `text: auto, eol: lf`, and yet
+#   the working copy comes back CRLF.
+#
+#   So the repo and every clone are LF, but a CRLF working copy here is expected
+#   rather than a mistake. `git status` will not show it, because the index already
+#   holds LF. Use `eol=lf` (not `text=auto`) on a path when the WORKING COPY must be
+#   LF too; the .bat/.cmd lines below do exactly that, in the other direction.
+#
+#   A file added by an editor that writes CRLF (PowerShell's `Add-Content` does)
+#   shows up as "CRLF will be replaced by LF the next time Git touches it" — that
+#   warning is about the working copy, not about what gets committed.
 
 * text=auto eol=lf
 
+# Force the working copy too, not just the repository: cmd.exe needs real CRLF.
 *.bat  text eol=crlf
 *.cmd  text eol=crlf
 

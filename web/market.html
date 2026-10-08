@@ -59,6 +59,16 @@
   -->
   <section id="view-market" class="hidden">
     <div class="note" id="note">加载中…</div>
+
+    <!--
+      DSH account binding, offered rather than performed.
+
+      It is one-to-one and therefore scarce: binding on sign-in claimed a slot
+      without asking, so logging into the wrong market account silently consumed a
+      binding that then needed an administrator to release. The user clicks.
+    -->
+    <div class="bindbar" id="binding"></div>
+
     <div class="bar">
       <input type="search" id="query" placeholder="搜索插件名 / 摘要 / 归属团队" />
       <span class="meta" id="count"></span>
@@ -88,9 +98,21 @@ let dshIdentity = { source: 'none', userId: null, name: null, deviceId: null, re
 /** The binding the service reports for the signed-in market account. */
 let binding = null
 
+/**
+ * Describe the DSH account this machine carries — and ONLY that.
+ *
+ * An earlier version of this function said 「（已绑定）」. That was wrong on two counts:
+ * it described the MARKET binding while claiming to describe the DSH account, and it
+ * was computed from the identity alone, so it announced a binding before anything had
+ * asked the service. Whether a binding exists is `binding`'s job.
+ */
 function dshLabel() {
-  if (dshIdentity.source === 'account') return `${dshIdentity.name ?? 'DSH 账号'}（已绑定）`
-  if (dshIdentity.source === 'device-only') return `DSH 账号未取得账号 ID：${dshIdentity.reason ?? '未知原因'}`
+  if (dshIdentity.source === 'account') {
+    return `DSH 账号：${dshIdentity.name ?? '(无显示名)'}　${dshIdentity.userId}`
+  }
+  if (dshIdentity.source === 'device-only') {
+    return `DSH 账号未取得账号 ID：${dshIdentity.reason ?? '未知原因'}`
+  }
   return `未检测到 DSH 账号：${dshIdentity.reason ?? '未知原因'}`
 }
 
@@ -341,9 +363,14 @@ async function loadDshIdentity() {
 /**
  * Bind this DSH account to the signed-in market account.
  *
- * The rule is one-to-one, and the service enforces BOTH directions, so a conflict
- * says which side collided. Those two cases need different actions from the user or
- * an administrator, so they are reported differently rather than as one failure.
+ * MANUAL, by explicit click. Binding on sign-in was the first version and it was
+ * wrong: it claimed a scarce slot — one DSH account to one market account — without
+ * asking, and a user who logged into the wrong market account silently consumed a
+ * binding that then needed an administrator to release.
+ *
+ * Before offering the button, `lookup` is asked whether this DSH account is already
+ * taken. That is why the route exists: a clicked button that always fails on a taken
+ * account is a worse experience than a button that already says so.
  *
  * A machine with no stable DSH account id is not an error: it just keeps using the
  * ordinary login, which is also the only option for someone not signed into DSH.
@@ -363,6 +390,87 @@ async function bindIdentity() {
     return { ok: true, unchanged: result.body?.unchanged === true }
   }
   return { ok: false, code: result.body?.code, detail: result.body?.detail }
+}
+
+/** Ask the service whether this DSH account already holds a slot. */
+async function lookupDshTaken() {
+  if (dshIdentity.source !== 'account' || !dshIdentity.userId) return null
+  try {
+    const result = await service(`/dsh-market/identity/lookup?dshUserId=${encodeURIComponent(dshIdentity.userId)}`)
+    // The answer is only ever a boolean; it never says who holds it.
+    return result.ok ? Boolean(result.body?.bound) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Draw the binding line: current state, plus the button that changes it.
+ *
+ * Rebuilt from scratch each time so it cannot show a stale state after a bind, a
+ * reload or a logout.
+ */
+async function renderBinding() {
+  const box = $('binding')
+  box.textContent = ''
+
+  const line = document.createElement('div')
+  line.className = 'meta'
+  box.appendChild(line)
+
+  const action = document.createElement('button')
+  action.className = 'btn'
+  box.appendChild(action)
+
+  if (binding) {
+    line.textContent = `已绑定 DSH 账号：${binding.dshName || '(无显示名)'}　${binding.dshUserId}`
+    // Unbinding is one-to-one bookkeeping that affects both sides, so it stays with
+    // the administrator in the server console rather than in an installer's UI.
+    action.textContent = '解绑（需管理员）'
+    action.disabled = true
+    return
+  }
+
+  if (dshIdentity.source !== 'account') {
+    line.textContent = `未绑定。${dshLabel()}`
+    action.textContent = '绑定此 DSH 账号'
+    action.disabled = true
+    return
+  }
+
+  line.textContent = `未绑定。检测到 DSH 账号：${dshIdentity.name ?? '(无显示名)'}　${dshIdentity.userId}`
+  action.textContent = '绑定此 DSH 账号'
+  action.disabled = true
+
+  const taken = await lookupDshTaken()
+  if (taken === true) {
+    line.textContent += '\n这个 DSH 账号已经绑定了别的市场账号（一个 DSH 账号只能绑一个）。'
+    action.textContent = '该 DSH 账号已被占用'
+    return
+  }
+
+  action.disabled = false
+  if (taken === null) {
+    // The lookup failed but the bind may still work; say so rather than hiding the
+    // action behind a probe that is only a convenience.
+    line.textContent += '\n（无法预先确认该 DSH 账号是否已被占用，绑定时会由服务端判定）'
+  }
+  action.addEventListener('click', doBind)
+}
+
+async function doBind() {
+  const button = $('binding').querySelector('button')
+  if (button) { button.disabled = true; button.textContent = '绑定中…' }
+  const result = await bindIdentity()
+  if (result.ok) {
+    status(result.unchanged ? '这个 DSH 账号已经绑在你名下，无需重复绑定。' : '已绑定。')
+  } else if (result.skipped) {
+    status('这台机器没有可用的 DSH 账号 ID，无法绑定。', true)
+  } else {
+    reportBindFailure(result)
+  }
+  await renderBinding()
+  if (catalog) renderNote()
 }
 
 /** Report a binding conflict so the user knows which side to ask about. */
@@ -393,12 +501,19 @@ S.onAuthenticated(async () => {
   // include the DSH label: the login hint already shows it, and overwriting with the
   // service URL alone would drop it.
   $('login-service').textContent = `服务端：${state.serviceUrl}\n${dshLabel()}`
-  const failure = await bindIdentity()
-  if (failure.ok === false) reportBindFailure(failure)
+  // NO automatic binding: signing in must not claim a one-to-one slot on the user's
+  // behalf. The state is read and offered, and the user clicks.
+  try {
+    const mine = await service('/dsh-market/identity/me')
+    binding = mine.body?.binding ?? null
+  } catch {
+    binding = null
+  }
   // Installed state first, then the catalog: the grid decides each card's buttons
   // from `installedMap`, so drawing it before the list arrives offers 安装 for
   // plugins that are already here.
   await refreshCatalog()
+  await renderBinding()
   show('market')
 })
 
