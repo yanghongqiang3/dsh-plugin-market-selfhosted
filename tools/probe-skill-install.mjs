@@ -92,10 +92,23 @@ publishSkill('@dsh-internal/skill-no-file', {})
 // ------------------------------------------------------------------ the plugin
 const { apply } = await import('../lib/plugin.js')
 const routes = []
-/** A stand-in for `ctx.skills`, recording what the plugin registers. */
+/**
+ * A stand-in for `ctx.skills` that behaves like the real registry in the one way that
+ * matters here: a name is FIRST-WINS, and the returned disposer removes it. Without that
+ * fidelity the live-sync logic could not be tested at all.
+ */
+const skillCatalog = new Map()
 const registered = []
 const fakeSkills = {
-  register(skill) { registered.push(skill); return () => {} },
+  register(skill) {
+    if (skillCatalog.has(skill.name)) {
+      // Mirrors the registry: a duplicate is ignored, not replaced.
+      return () => {}
+    }
+    skillCatalog.set(skill.name, skill)
+    registered.push(skill)
+    return () => { skillCatalog.delete(skill.name) }
+  },
 }
 apply({
   get: (name) => {
@@ -136,7 +149,7 @@ const entry = (suffix) => catalog.body.entries.find((e) => e.name.endsWith(suffi
 console.log('--- 安装 ---')
 const skillsRoot = join(profileDir, '.dsh-market-skills')
 // Mirrors the plugin's skillDirName(): a scoped package flattens to one directory level.
-const skillDirFor = (name) => join(skillsRoot, name.replace(/\//g, '__'))
+const skillDirForName = (name) => join(skillsRoot, name.replace(/\//g, '__'))
 const installed = await invoke('/dsh-market/install', {
   token: alice, name: entry('skill-release-checklist').name,
   version: entry('skill-release-checklist').version,
@@ -146,7 +159,9 @@ const installed = await invoke('/dsh-market/install', {
 ok('技能安装成功', installed.body?.ok === true, JSON.stringify(installed.body).slice(0, 140))
 ok('  报告 kind=skill（不是 plugin/bundle）', installed.body?.kind === 'skill', String(installed.body?.kind))
 ok('  说明注册方式', String(installed.body?.registeredIn).includes('.dsh-market-skills'), String(installed.body?.registeredIn))
-const skillDir = skillDirFor(entry('skill-release-checklist').name)
+// Skills have no loader row, so nothing has to be picked up at boot.
+ok('  明确报告不需要重启', installed.body?.needRestart === false, String(installed.body?.needRestart))
+const skillDir = skillDirForName(entry('skill-release-checklist').name)
 ok('  落到市场自己的目录', existsSync(skillDir), skillDir)
 ok('  SKILL.md 在位', existsSync(join(skillDir, 'SKILL.md')))
 ok('  子目录资源也在（references/）', existsSync(join(skillDir, 'references', 'notes.md')))
@@ -173,13 +188,13 @@ const noFile = await invoke('/dsh-market/install', {
   sha256: entry('skill-no-file').sha256, channel: entry('skill-no-file').channel,
 })
 ok('没有 SKILL.md 时拒绝安装', noFile.body?.ok === false, `${noFile.body?.code}`)
-ok('  且没有留下目录', !existsSync(skillDirFor(entry('skill-no-file').name)))
+ok('  且没有留下目录', !existsSync(skillDirForName(entry('skill-no-file').name)))
 const badName = await invoke('/dsh-market/install', {
   token: alice, name: entry('skill-bad-name').name, version: entry('skill-bad-name').version,
   sha256: entry('skill-bad-name').sha256, channel: entry('skill-bad-name').channel,
 })
 ok('非法 kebab-case 名称被拒', badName.body?.code === 'E_SKILL_BAD_NAME', String(badName.body?.code))
-ok('  且没有留下目录', !existsSync(skillDirFor(entry('skill-bad-name').name)))
+ok('  且没有留下目录', !existsSync(skillDirForName(entry('skill-bad-name').name)))
 
 console.log('')
 console.log('--- 已装列表要认得它 ---')
@@ -222,11 +237,52 @@ const afterList = await getInstalled()
 ok('  已装列表不再包含它', afterList.entries.every((e) => e.kind !== 'skill'), JSON.stringify(afterList.entries.map((e) => e.kind)))
 
 console.log('')
+console.log('--- 装完即时生效（不必重启）---')
+/**
+ * The first version only registered at mount, so a skill installed while DSH was running
+ * stayed invisible until a restart. The filesystem provider refreshes live, so users would
+ * have had to know which kind of artifact they installed to guess whether to restart.
+ */
+const fresh = await invoke('/dsh-market/install', {
+  token: alice, name: entry('skill-release-checklist').name,
+  version: entry('skill-release-checklist').version,
+  sha256: entry('skill-release-checklist').sha256,
+  channel: entry('skill-release-checklist').channel,
+})
+ok('重新安装技能', fresh.body?.ok === true, JSON.stringify(fresh.body).slice(0, 80))
+// The poller runs every 2s; give it room without assuming an exact tick.
+let appeared = false
+for (let i = 0; i < 40 && !appeared; i += 1) {
+  await new Promise((r) => setTimeout(r, 250))
+  appeared = skillCatalog.has('release-checklist')
+}
+ok('  无需重启就进入目录', appeared, JSON.stringify([...skillCatalog.keys()]))
+
+// Editing the body must REPLACE the entry. register() is first-wins, so a sync that did
+// not dispose first would leave the stale text in place and look like it had worked.
+writeFileSync(join(skillDirForName(entry('skill-release-checklist').name), 'SKILL.md'),
+  '---\nname: release-checklist\ndescription: 改过的说明。\n---\n\n新正文。\n')
+let updated = false
+for (let i = 0; i < 40 && !updated; i += 1) {
+  await new Promise((r) => setTimeout(r, 250))
+  updated = String(skillCatalog.get('release-checklist')?.content ?? '').includes('新正文')
+}
+ok('  改了正文会替换（不是留着旧的）', updated, JSON.stringify(String(skillCatalog.get('release-checklist')?.content ?? '').slice(0, 20)))
+
+await invoke('/dsh-market/uninstall', { name: entry('skill-release-checklist').name })
+let gone = false
+for (let i = 0; i < 40 && !gone; i += 1) {
+  await new Promise((r) => setTimeout(r, 250))
+  gone = !skillCatalog.has('release-checklist')
+}
+ok('  卸载后即时移出目录', gone, JSON.stringify([...skillCatalog.keys()]))
+
+console.log('')
 console.log('结论：')
 console.log('  · 技能不进 loader：没有 patch 行、没有 bundles 条目、没有 file: 依赖。')
 console.log('  · 只写市场自己的目录 <profile>/.dsh-market-skills，不碰 ~/.dsh/skills。')
 console.log('  · 缺 SKILL.md 或名字非法一律拒绝，不留半装目录。')
-console.log('  · 启动时经 ctx.skills.register 进入会话目录（所以要重启才生效）。')
+console.log('  · 启动时经 ctx.skills.register 进入会话目录，之后轮询同步——装完即时生效。')
 
 app.server.close()
 app.db.close()

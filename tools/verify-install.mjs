@@ -941,6 +941,33 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
       ? ok(`  拒绝 ${code}`)
       : fail(`  没有 ${code} —— 残缺的技能会被半个装进去`)
   }
+  /**
+   * Registration must be RE-RUN, not done once at mount.
+   *
+   * The first version registered only at mount, so installing a skill meant restarting DSH
+   * — while the filesystem provider refreshes live. A user would have had to know which
+   * kind of artifact they installed to guess whether a restart was needed.
+   *
+   * The subtle half is dispose-before-register: `register()` is FIRST-WINS per layer, so an
+   * edited skill would keep its OLD body in the catalog and still look like it updated.
+   */
+  pluginSource3.includes('setInterval')
+    ? ok('技能目录会被轮询（装完即时生效，不必重启）')
+    : fail('技能只在启动时注册一次 —— 装完必须重启')
+  // Bound to a name rather than used inline: a line starting with `/` after a line ending
+  // in `)` is parsed as DIVISION, not a regex, so the inline form is a syntax error.
+  const disposesBeforeRegister = /existing\.dispose\(\)[\s\S]{0,500}?skills\.register\(/.test(pluginSource3)
+  disposesBeforeRegister
+    ? ok('  重注册前先 dispose（register 是先到先得，否则改了正文不生效）')
+    : fail('  重注册前没有 dispose —— 改过的技能会留着旧正文')
+  pluginSource3.includes('entry.dispose()')
+    ? ok('  目录里消失的技能会被移出目录')
+    : fail('  没有处理技能被删除的情况')
+  // The log has to distinguish "no skills service" from "a service and an empty directory".
+  // Both mounted silently before, which cost a round of misdiagnosis.
+  pluginSource3.includes('ctx.skills 可用')
+    ? ok('  日志区分「没有 skills 服务」与「服务在但目录为空」')
+    : fail('  两种情况的日志无法区分 —— 排查时会误判')
 }
 
 resolveSpec(PKG)

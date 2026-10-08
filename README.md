@@ -418,7 +418,7 @@ POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artif
 | 安装时写什么 | profile 的 `cordis.patch.yml` 插一行（或 `dsh.profile.bundles`） | **什么都不写**，只放文件 |
 | 放在哪 | `<profile>/node_modules/<包名>` | `<profile>/.dsh-market-skills/<包名扁平化>` |
 | 怎么进会话 | loader 自动 mount | 宿主插件启动时 `ctx.skills.register` |
-| 生效 | 重启 DSH | 重启 DSH |
+| 生效 | **重启 DSH**（loader 只在启动时读） | **即时**（轮询目录，装完就进目录） |
 
 #### 发布一个 skill
 
@@ -455,8 +455,15 @@ DSH 的 skill 根有四个（`<项目根>/.dsh/skills`、`<项目根>/.agents/sk
 `~/.agents/skills`），**市场一个都不用**。理由是归属：`~/.dsh/skills` 是你自己手写 skill 的
 地方，市场往里放东西之后就分不清哪些是它装的——卸载时**可能删掉你手写的**。
 
-所以市场注册自己的 provider（`ctx.skills.register`，注册表文档里明确支持的扩展点），
-只读自己那个目录。卸载就是删目录，空目录也会一并清掉。
+所以市场通过 `ctx.skills.register`（注册表文档里明确支持的扩展点）只读自己那个目录。
+卸载就是删目录，空目录也会一并清掉。
+
+注册不是只在启动时做一次：插件每 2 秒重读该目录，**安装 / 改正文 / 卸载都会在几秒内反映到
+会话目录里，不需要重启**。这一点比插件好——插件必须重启，因为 loader 只在启动时读一次。
+
+> 重新注册要小心：`register()` 在同一个 layer 里是**先到先得**的，直接覆盖同名条目会被忽略
+> 并只留一条警告。所以改了正文的技能必须**先 dispose 再注册**，否则目录里留着的还是旧正文，
+> 而看起来像是更新成功了。
 
 #### 拒绝而不是半装
 

@@ -11,6 +11,23 @@
 // composed, and the only symptom was the audit's unhelpful `failed to import`.
 // This file now asserts the form the loader actually requires.
 import { pathToFileURL } from 'node:url'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+/**
+ * Keep this run's diagnostics OUT of the operator's real log.
+ *
+ * `lib/plugin.js` reads these at module load, so they must be set before the import below.
+ * Leaving them unset made every run append to `~/.dsh/plugin-marketplace-diag.log`, and
+ * because this harness mounts the plugin with a context that has no `skills` service, the
+ * real log filled up with `ctx.skills 不可用` lines. That was read as evidence that the
+ * feature was broken on a real DSH — it was evidence about THIS FILE.
+ */
+const scratch = mkdtempSync(join(tmpdir(), 'dsh-host-test-'))
+process.env.MARKET_DIAG_LOG = join(scratch, 'diag.log')
+process.env.DSH_PROFILE_DIR = join(scratch, 'profile')
+process.env.DSH_HOME = scratch
 
 const root = process.argv[2] ?? 'E:/workspace/dsh'
 const bundleMod = await import(pathToFileURL(`${root}/lib/bundle.js`).href)
