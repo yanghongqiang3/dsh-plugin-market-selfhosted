@@ -536,6 +536,31 @@ zip **不是第二种存储格式**：服务端读出来、重新打成规范的
   连 `dsh.bundle.patch` 指向的文件缺失都能从目录发出去，同样的包上传却会被拒。
 - 旧数据库开机会自动补上 `kind` 列，历史行按 `plugin` 读出。
 
+#### 已知限制：卸载技能后，`/` 菜单里的提示要等新会话才消失
+
+卸载一个技能后，**模型侧立刻生效**（`skill` 工具马上找不到它，实测如此），但 **DSH 输入框里打 `/`
+时那个技能名还会提示** —— 直到新开一个会话或重启 DSH。
+
+原因是 DSH 客户端自己的缓存，不是本插件的：
+
+```js
+const fetchCatalog = (sessionId) => {
+  const existing = fetches.get(sessionId)
+  if (existing !== void 0) return existing      // 命中就直接返回旧结果
+  ...
+}
+ctx.remote.$on('agent-preset/selected', invalidate)
+ctx.on('connection/reset', clearAll)
+```
+
+`/` 菜单的列表**按会话缓存一次**，只有「选择了预设」「连接重置」「组件卸载」三种情况会清它。
+**技能注册表的变动没有订阅进去**，所以运行时注销不会让这个缓存失效。缓存按 `sessionId` 键，
+因此**新会话没有条目 → 必然重新拉取**。
+
+> 本插件**刻意不**去伪造 `agent-preset/selected` 事件来强制刷新：那个事件的含义是「本会话切换了
+> 预设」，而且会**写进会话日志**的 `agentPreset` 投影。为了清缓存而发它，会让日志与实际运行状态
+> 不符 —— 那是往数据里掺假，不是修 bug。
+
 #### 为什么放市场自己的目录，不放 `~/.dsh/skills`
 
 DSH 的 skill 根有四个（`<项目根>/.dsh/skills`、`<项目根>/.agents/skills`、`~/.dsh/skills`、

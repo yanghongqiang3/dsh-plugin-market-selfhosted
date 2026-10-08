@@ -272,6 +272,20 @@ const listed = list.entries.find((e) => e.name === entry('skill-release-checklis
 ok('已装列表包含该技能', listed !== undefined, JSON.stringify(list.entries.map((e) => `${e.name}:${e.kind}`)))
 ok('  并标明 kind=skill', listed?.kind === 'skill', String(listed?.kind))
 ok('  且带上技能在目录里的名字', listed?.skillName === 'release-checklist', String(listed?.skillName))
+/**
+ * The installed VERSION must be real, not null.
+ *
+ * It reported `null` before, because `installed()` skipped skills when filling versions in —
+ * a skill has no directory under `node_modules`, so the code assumed there was nothing to
+ * read. There is: the `package.json` inside the skill's own directory. With `null`, the page
+ * compared the catalog's `1.0.0` against it, found them different, and offered
+ * 「更新到 1.0.0」 for a version already installed.
+ *
+ * Asserted HERE, and not only in the UI probe, because that probe stubs
+ * `/dsh-market/installed`: it tests how the page DRAWS a list, not how the plugin BUILDS one
+ * — and this bug lived in the building.
+ */
+ok('  已装列表带真实版本（不是 null）', listed?.version === '1.0.0', String(listed?.version))
 
 console.log('')
 console.log('--- 注册进 ctx.skills ---')

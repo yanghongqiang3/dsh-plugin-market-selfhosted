@@ -280,7 +280,20 @@ function cardOf(entry) {
     uninstall.addEventListener('click', () => doUninstall(entry, uninstall))
     actions.appendChild(uninstall)
 
-    if (entry.version && installedHere.version !== entry.version) {
+    /**
+     * Offer an update only when the versions actually DIFFER — and only when the installed
+     * version is known.
+     *
+     * The bug this fixes: skill entries reported `version: null` (the host plugin skipped
+     * them when filling versions in, because a skill has no directory under `node_modules`),
+     * so `null !== '1.0.0'` was true and an already-installed 1.0.0 was offered as
+     * 「更新到 1.0.0」.
+     *
+     * The `installedHere.version &&` guard is the durable half: if the installed version is
+     * ever unknown again, offering an update is the wrong guess, and saying nothing is the
+     * right one.
+     */
+    if (entry.version && installedHere.version && entry.version !== installedHere.version) {
       const update = document.createElement('button')
       update.className = 'btn btn-primary'
       update.textContent = `更新到 ${entry.version}`

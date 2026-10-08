@@ -1087,6 +1087,29 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource3.includes('ctx.skills 可用')
     ? ok('  日志区分「没有 skills 服务」与「服务在但目录为空」')
     : fail('  两种情况的日志无法区分 —— 排查时会误判')
+  /**
+   * An installed skill must report its VERSION.
+   *
+   * It reported `null`: `installed()` skipped skills when filling versions in, because a
+   * skill has no directory under `node_modules` — but it does have a `package.json`, in its
+   * own directory. The page then compared the catalog's `1.0.0` against `null`, found them
+   * different, and offered 「更新到 1.0.0」 for the version already installed.
+   */
+  pluginSource3.includes('skillManifestOf')
+    ? ok('  已安装技能从自己的 manifest 读取版本')
+    : fail('  技能条目仍报告 null 版本 —— 会给自己发「更新」')
+  // Bound to names: a line starting with `/` after a line ending in `)` is DIVISION.
+  const reportsSkillVersion = /version: skill\.version \?\? null/.test(pluginSource3)
+  reportsSkillVersion
+    ? ok('    installed() 用上了那个版本')
+    : fail('    installed() 没有用技能自己的版本')
+  // ...and the page must not guess when the installed version is unknown.
+  // `marketSource` belongs to an earlier block, so read the page again here.
+  const marketPage2 = fs.readFileSync(path.join(dir, 'web', 'market.html'), 'utf8')
+  const updateGuard = /installedHere\.version && entry\.version !== installedHere\.version/.test(marketPage2)
+  updateGuard
+    ? ok('  本机版本未知时不提供更新（不猜）')
+    : fail('  页面在不知道本机版本时仍会提供更新 —— 同类 bug 会换个形式回来')
 }
 
 /**

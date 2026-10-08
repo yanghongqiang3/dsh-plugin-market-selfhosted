@@ -103,6 +103,14 @@ const PAGE_ROUTES = new Map([
   ['/dsh-market/assets/shared.js', ['shared.js', 'text/javascript; charset=utf-8']],
 ])
 
+/**
+ * What the plugin's `/dsh-market/installed` route reports for this machine.
+ *
+ * Mutable so a later section can re-run the page's own reload path with a skill already
+ * installed — which is the only way to reach the 更新/卸载 branch that a null version broke.
+ */
+let installedStub = []
+
 let proxyPort = 0
 const proxy = createServer(async (req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${proxyPort}`)
@@ -128,7 +136,7 @@ const proxy = createServer(async (req, res) => {
   }
   if (url.pathname === '/dsh-market/installed') {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, profileDir: join(work, 'profile'), patchFile: '', entries: [] }))
+    res.end(JSON.stringify({ ok: true, profileDir: join(work, 'profile'), patchFile: '', entries: installedStub }))
     return
   }
   if (url.pathname === '/dsh-market/session' || url.pathname === '/dsh-market/link') {
@@ -475,6 +483,63 @@ ok('  没有混进插件', (skillView?.kinds ?? []).every((k) => k === '技能')
 ok('  只有「技能」被选中', JSON.stringify(skillView?.on) === '["skill"]', JSON.stringify(skillView?.on))
 ok('  分页总数变成 5', /共 5 条/.test(skillView?.info ?? ''), JSON.stringify(skillView?.info))
 ok('  计数显示 5 / 14', /5 \/ 14/.test(skillView?.count ?? ''), JSON.stringify(skillView?.count))
+
+console.log('')
+console.log('--- 已安装的卡片：同版本不提供更新 ---')
+/**
+ * The reported bug: a skill installed at 1.0.0 was offered 「更新到 1.0.0」.
+ *
+ * Cause: skill entries reported `version: null` from the plugin, so the page's
+ * `installedHere.version !== entry.version` was `null !== '1.0.0'` — true.
+ *
+ * Driven through the page's own reload path (the 刷新目录 button → `refreshCatalog` →
+ * `/dsh-market/installed`), so this exercises the real code rather than a stub of it. Both
+ * directions are asserted: no update at the same version, and an update when one is due.
+ */
+{
+  const reloadAndRead = async (stub) => {
+    installedStub = stub
+    await evaluate(`document.getElementById('refresh').click()`)
+    await sleep(900)
+    return evaluate(`(() => {
+      const card = [...document.querySelectorAll('#grid .card')]
+        .find((c) => c.querySelector('.name')?.textContent === '@dsh-internal/skill-01')
+      if (!card) return null
+      return {
+        tags: [...card.querySelectorAll('.meta .tag')].map((t) => t.textContent),
+        buttons: [...card.querySelectorAll('.actions button')].map((b) => b.textContent),
+      }
+    })()`)
+  }
+
+  const fresh = await reloadAndRead([])
+  ok('未安装时提供「安装」', fresh?.buttons?.includes('安装') === true, JSON.stringify(fresh?.buttons))
+
+  const same = await reloadAndRead([
+    { name: '@dsh-internal/skill-01', version: '1.0.0', kind: 'skill', skillName: 'skill-01' },
+  ])
+  ok('已安装时标明「已安装到本机」', same?.tags?.includes('已安装到本机') === true, JSON.stringify(same?.tags))
+  ok('  提供「卸载」', same?.buttons?.includes('卸载') === true, JSON.stringify(same?.buttons))
+  // The whole point: the SAME version must not be offered as an update.
+  const sameUpdate = (same?.buttons ?? []).find((label) => label.startsWith('更新到'))
+  ok('  同一版本不提供更新', sameUpdate === undefined, String(sameUpdate))
+
+  const older = await reloadAndRead([
+    { name: '@dsh-internal/skill-01', version: '0.9.0', kind: 'skill', skillName: 'skill-01' },
+  ])
+  ok('本机版本更旧时提供更新', (older?.buttons ?? []).includes('更新到 1.0.0'), JSON.stringify(older?.buttons))
+
+  // An unreadable manifest must not resurrect the bug: unknown installed version, no update.
+  const unknown = await reloadAndRead([
+    { name: '@dsh-internal/skill-01', version: null, kind: 'skill', skillName: 'skill-01' },
+  ])
+  const unknownUpdate = (unknown?.buttons ?? []).find((label) => label.startsWith('更新到'))
+  ok('本机版本未知时不提供更新（不猜）', unknownUpdate === undefined, String(unknownUpdate))
+
+  installedStub = []
+  await evaluate(`document.getElementById('refresh').click()`)
+  await sleep(700)
+}
 
 console.log('')
 console.log('--- 搜索在服务端做（分页后仍能搜到别的页）---')
