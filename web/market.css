@@ -71,7 +71,19 @@
   body:has(#view-market:not(.hidden)) > header{flex:0 0 auto}
   body:has(#view-market:not(.hidden)) > .wrap{flex:1 1 auto;min-height:0;display:flex;
                                               flex-direction:column;/* bottom padding moves to the footer */
-                                              padding-bottom:0}
+                                              padding-bottom:0;
+                                              /**
+                                               * Use the whole window.
+                                               *
+                                               * `max-width:1180px` was right for a page of prose. On a
+                                               * wide screen it left a third of the window empty beside a
+                                               * grid whose columns are 300px cards — and the grid is
+                                               * `auto-fill`, so the space simply becomes more columns.
+                                               *
+                                               * The console is unaffected: it has no `#view-market`, so
+                                               * this rule never matches there, and it keeps its own cap.
+                                               */
+                                              max-width:none}
   #view-market{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
   /**
    * `align-content:start` matters: a grid whose rows stretch would centre short rows and put

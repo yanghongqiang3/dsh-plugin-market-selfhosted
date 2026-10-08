@@ -421,6 +421,44 @@ console.log('--- 顶部紧凑、卡片滚动、分页固定在页脚 ---')
 }
 
 console.log('')
+console.log('--- 宽屏不留大块空白 ---')
+/**
+ * Measured, because the complaint was geometric.
+ *
+ * `.wrap` carried `max-width:1180px`, which is right for a page of prose and wrong for a card
+ * grid: on a wide window it left a third of the screen empty on the right. A stylesheet that
+ * stops applying looks exactly like one that was never written, so this checks the geometry
+ * rather than the presence of a rule.
+ */
+{
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 1800, height: 900, deviceScaleFactor: 1, mobile: false,
+  })
+  await sleep(400)
+  const wide = await evaluate(`(() => {
+    const wrap = document.querySelector('.wrap')
+    const cards = [...document.querySelectorAll('#grid .card')]
+    const rights = cards.map((c) => c.getBoundingClientRect().right)
+    return {
+      viewport: window.innerWidth,
+      wrapWidth: Math.round(wrap.getBoundingClientRect().width),
+      cards: cards.length,
+      lastCardRight: rights.length ? Math.round(Math.max(...rights)) : 0,
+      columns: new Set(cards.map((c) => Math.round(c.getBoundingClientRect().left))).size,
+    }
+  })()`)
+  ok('内容区占满窗口宽度（右侧不留大块空白）',
+    wide.wrapWidth >= wide.viewport - 40,
+    `wrap ${wide.wrapWidth} / 视口 ${wide.viewport}`)
+  // The trailing allowance is the grid's scrollbar gutter plus the page padding.
+  ok('  卡片一直排到内容区右侧', wide.viewport - wide.lastCardRight <= 40,
+    `最右卡片 ${wide.lastCardRight}，右侧剩 ${wide.viewport - wide.lastCardRight}px`)
+  ok('  多出来的宽度变成更多列，而不是更宽的卡片', wide.columns >= 4, `${wide.columns} 列`)
+  await send('Emulation.clearDeviceMetricsOverride')
+  await sleep(300)
+}
+
+console.log('')
 console.log('--- 点「技能」只剩技能 ---')
 await evaluate(`[...document.querySelectorAll('#kind-tabs .tab')].find((b) => b.dataset.kind === 'skill').click()`)
 await sleep(900)
@@ -493,6 +531,20 @@ if (SHOT_DIR !== null) {
   const small = await send('Page.captureScreenshot', { format: 'png' })
   writeFileSync(join(SHOT_DIR, 'market-fold.png'), Buffer.from(small.result.data, 'base64'))
   console.log(`  截图: ${join(SHOT_DIR, 'market-fold.png')}`)
+  /**
+   * And a WIDE one.
+   *
+   * `max-width:1180px` is invisible on a narrow window and glaring on a wide one — which is
+   * how it survived: every check and every screenshot had been taken at a width where it did
+   * nothing.
+   */
+  await send('Emulation.setDeviceMetricsOverride', {
+    width: 1800, height: 900, deviceScaleFactor: 1, mobile: false,
+  })
+  await sleep(400)
+  const wide = await send('Page.captureScreenshot', { format: 'png' })
+  writeFileSync(join(SHOT_DIR, 'market-wide.png'), Buffer.from(wide.result.data, 'base64'))
+  console.log(`  截图: ${join(SHOT_DIR, 'market-wide.png')}`)
 }
 
 console.log('')

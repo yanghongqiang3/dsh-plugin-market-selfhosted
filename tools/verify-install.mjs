@@ -1007,6 +1007,24 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     footerHasRule
       ? ok('  页脚有分隔线，读起来像页脚')
       : fail('  页脚没有视觉分隔')
+    /**
+     * The market view must lift the 1180px cap.
+     *
+     * That cap is right for a page of prose and wrong for a card grid: on a wide window it
+     * left a third of the screen empty on the right. It survived every check and every
+     * screenshot taken at a narrow width, where it did nothing — so it is asserted here as
+     * well as measured in the browser probe.
+     */
+    const marketWrap = /body:has\(#view-market:not\(\.hidden\)\) > \.wrap\{[^}]*max-width:none/.test(marketCss)
+    marketWrap
+      ? ok('市场视图不受 1180px 上限约束（宽屏右侧不留空白）')
+      : fail('  .wrap 仍有 1180px 上限 —— 宽屏右侧会空出一大块')
+    // ...and the console must keep its cap, since the two share this stylesheet.
+    const consoleCss = fs.readFileSync(path.join(dir, 'web', 'console.css'), 'utf8')
+    const consoleKeepsCap = /\.wrap:has\(#view-console:not\(\.hidden\)\)\s*\{\s*max-width:\s*1180px/.test(consoleCss)
+    consoleKeepsCap
+      ? ok('  控制台仍保留自己的 1180px 上限')
+      : fail('  控制台的上限没了 —— 管理页会被拉得难以阅读')
 }
 
 /**

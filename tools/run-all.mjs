@@ -18,7 +18,7 @@
  *   node tools/run-all.mjs skill kind      # only suites whose name matches
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -72,6 +72,39 @@ const rows = []
 let totalOk = 0
 let totalFail = 0
 const broken = []
+
+/**
+ * Parse every tool before running any of them.
+ *
+ * A line that begins with `/` is DIVISION, not a regex, so a line after `foo(...)` that
+ * starts with a regex literal is a syntax error. That has been written into these files four
+ * times during ordinary editing, and the failure mode is nasty: the file is never loaded, so
+ * nothing reports anything until someone happens to run that one tool — while a summary that
+ * only counts `ok`/`FAIL` lines cheerfully calls the result "0 failures".
+ *
+ * `node --check` on each file costs a couple of seconds and turns that into an immediate,
+ * named error.
+ */
+{
+  const scripts = readdirSync(HERE).filter((entry) => entry.endsWith('.mjs')).sort()
+  const bad = []
+  for (const entry of scripts) {
+    const result = spawnSync(process.execPath, ['--check', join(HERE, entry)], { encoding: 'utf8' })
+    if (result.status !== 0) {
+      const message = String(result.stderr ?? '').split('\n').find((line) => /Error/.test(line)) ?? 'parse error'
+      bad.push(`${entry}: ${message.trim()}`)
+    }
+  }
+  if (bad.length > 0) {
+    console.log('语法检查未通过 —— 这些文件根本不会被加载：')
+    for (const line of bad) console.log(`  · ${line}`)
+    console.log('')
+    console.log('RESULT: INCOMPLETE')
+    process.exit(1)
+  }
+  console.log(`语法检查：${scripts.length} 个测试脚本全部通过`)
+  console.log('')
+}
 
 const runOne = (label, file, args) => {
   const path = join(HERE, file)
