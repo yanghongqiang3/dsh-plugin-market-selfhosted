@@ -914,6 +914,35 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     : fail('关闭自动登录后没有就地重新启用的入口')
 }
 
+/**
+ * SKILL support.
+ *
+ * Skills are not loader entries: they are catalog items the agent reads on demand. So an
+ * install must NOT write a patch row or a bundle entry, and it must land in the market's
+ * OWN directory — writing into `~/.dsh/skills` would mix the market's files with the
+ * operator's hand-written ones, and a later uninstall could delete theirs.
+ */
+{
+  const pluginSource3 = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+  pluginSource3.includes('.dsh-market-skills')
+    ? ok('技能装到市场自己的目录（不碰 ~/.dsh/skills）')
+    : fail('技能没有自己的目录 —— 会与用户手写的 skill 混在一起')
+  pluginSource3.includes("get('skills')")
+    ? ok('技能经 ctx.skills 注册（注册表的正式扩展点）')
+    : fail('技能没有注册进 ctx.skills')
+  pluginSource3.includes('skillDirName')
+    ? ok('作用域包名会扁平化成一个目录层级')
+    : fail('作用域包名没有扁平化 —— 列表与卸载会找不到它')
+  pluginSource3.includes("kind === 'skill'")
+    ? ok('安装路径按 dsh.market.kind 分流')
+    : fail('安装路径没有区分 skill')
+  for (const code of ['E_SKILL_MISSING', 'E_SKILL_BAD_NAME', 'E_SKILL_BAD_FRONTMATTER']) {
+    pluginSource3.includes(code)
+      ? ok(`  拒绝 ${code}`)
+      : fail(`  没有 ${code} —— 残缺的技能会被半个装进去`)
+  }
+}
+
 resolveSpec(PKG)
 resolveSpec(`${PKG}/plugin`)
 

@@ -408,6 +408,70 @@ POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artif
 
 ---
 
+### 0.11 市场也能装 skill
+
+**插件和 skill 是两种东西，安装方式完全不同。**
+
+| | 插件（package.json） | skill（SKILL.md） |
+|---|---|---|
+| 谁来装载 | cordis loader，启动时 mount | **没有 loader**，agent 按需读取 |
+| 安装时写什么 | profile 的 `cordis.patch.yml` 插一行（或 `dsh.profile.bundles`） | **什么都不写**，只放文件 |
+| 放在哪 | `<profile>/node_modules/<包名>` | `<profile>/.dsh-market-skills/<包名扁平化>` |
+| 怎么进会话 | loader 自动 mount | 宿主插件启动时 `ctx.skills.register` |
+| 生效 | 重启 DSH | 重启 DSH |
+
+#### 发布一个 skill
+
+skill 包 = **一个最小的 `package.json`（市场元数据）+ `SKILL.md`**，其余 `references/`、
+`scripts/`、`assets/` 原样带上：
+
+```json
+{
+  "name": "@dsh-internal/skill-release-checklist",
+  "version": "1.0.0",
+  "dsh": { "market": { "kind": "skill", "owner": "platform", "summary": "发布前检查清单" } }
+}
+```
+
+```markdown
+---
+name: release-checklist        # 必填，kebab-case，这是模型看到的名字
+description: 发布前的检查清单。  # 必填
+whenToUse: 准备发布时            # 可选
+---
+
+正文……
+```
+
+> `kind: "skill"` 是关键。没有它，市场会把它当插件：插一行 loader 记录，然后因为找不到
+> 可加载的入口而在启动时报 `failed to import`。
+
+然后照常发布（`node server/cli.mjs publish --dir <目录>`），客户端就会在目录里看到它，
+安装按钮与插件完全一样。
+
+#### 为什么放市场自己的目录，不放 `~/.dsh/skills`
+
+DSH 的 skill 根有四个（`<项目根>/.dsh/skills`、`<项目根>/.agents/skills`、`~/.dsh/skills`、
+`~/.agents/skills`），**市场一个都不用**。理由是归属：`~/.dsh/skills` 是你自己手写 skill 的
+地方，市场往里放东西之后就分不清哪些是它装的——卸载时**可能删掉你手写的**。
+
+所以市场注册自己的 provider（`ctx.skills.register`，注册表文档里明确支持的扩展点），
+只读自己那个目录。卸载就是删目录，空目录也会一并清掉。
+
+#### 拒绝而不是半装
+
+装进去之前就会检查：`SKILL.md` 缺失（`E_SKILL_MISSING`）、frontmatter 缺失或调用开关不是
+布尔值（`E_SKILL_BAD_FRONTMATTER`）、`name` 不是 kebab-case（`E_SKILL_BAD_NAME`）——
+任一不合规都**不留目录**。一个坏 skill 也不会拖垮其他 skill 或插件：注册时逐个 try，
+失败的记进诊断日志并跳过。
+
+```powershell
+# 看市场装了什么技能（kind=skill）
+Invoke-RestMethod http://<服务端>:8787/dsh-market/installed   # 由宿主插件提供，见 /dsh-market/installed
+```
+
+---
+
 ## 1. 本机插件（客户端）
 
 ### 1.1 配置
