@@ -1,0 +1,29 @@
+# DSH bundle patch layer for dsh-plugin-marketplace.
+#
+# Three requirements, each verified against shipped code in app.asar:
+#
+#  1. The top level MUST be an insert list (`- insert:` wrapping the rows).
+#     A bare top-level row is read as an id-targeted override of an EXISTING
+#     row, not an insertion — the package would silently never enter the
+#     composition.
+#
+#  2. A row's `id` is a short addressable name; `name` is the package (or
+#     package subpath) the loader imports.
+#
+#  3. The BEHAVIOUR belongs to the row, not to the bundle. Every shipped bundle
+#     has an empty host half (`export {}`); a bundle whose own entry does work is
+#     audited as a failing entry by the desktop host, which reports it as a fatal
+#     "web boot: N entry did not activate".
+#
+# The browser half lives in THIS package's manifest (`dsh.client`), not in a
+# second package: a package listed in `dsh.profile.bundles` is itself a row, so
+# the bundle row carries the declaration. An extra client-only row consistently
+# failed to activate and is deliberately absent.
+#
+# Verify after a DSH restart:
+#   - ~/.dsh/plugin-marketplace-diag.log records "registered 7/7 routes"
+#   - a new icon appears in the sidebar (sidebar.panellist seat)
+
+- insert:
+    - id: marketplace
+      name: dsh-plugin-marketplace/plugin
