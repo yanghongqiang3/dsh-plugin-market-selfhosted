@@ -963,6 +963,12 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource3.includes('entry.dispose()')
     ? ok('  目录里消失的技能会被移出目录')
     : fail('  没有处理技能被删除的情况')
+  // Bound to a name: a line beginning with a regex literal after a line ending in ')' is
+  // parsed as DIVISION, which is how this file was briefly a syntax error.
+  const registersWithSource = /skills\.register\(\{[\s\S]{0,3000}?source:/.test(pluginSource3)
+  registersWithSource
+    ? ok('  注册时带 source（load 时必填；缺了能列出却加载不了）')
+    : fail('  注册时没有 source —— 技能列得出来，但加载会报 source must be a string')
   // The log has to distinguish "no skills service" from "a service and an empty directory".
   // Both mounted silently before, which cost a round of misdiagnosis.
   pluginSource3.includes('ctx.skills 可用')

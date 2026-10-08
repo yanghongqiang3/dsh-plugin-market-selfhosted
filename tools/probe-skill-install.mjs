@@ -93,20 +93,54 @@ publishSkill('@dsh-internal/skill-no-file', {})
 const { apply } = await import('../lib/plugin.js')
 const routes = []
 /**
- * A stand-in for `ctx.skills` that behaves like the real registry in the one way that
- * matters here: a name is FIRST-WINS, and the returned disposer removes it. Without that
- * fidelity the live-sync logic could not be tested at all.
+ * A stand-in for `ctx.skills`.
+ *
+ * It reproduces the two behaviours that actually bit me:
+ *
+ *  1. a name is FIRST-WINS, and the returned disposer removes it. Without that fidelity the
+ *     live-sync logic (dispose-before-register) could not be tested at all.
+ *  2. `register()` is NOT the only validation. Loading goes through `validateDefinition`,
+ *     which additionally demands that `source` and `provider` be strings. A registry stub
+ *     that only checked what `register()` checks passed while the REAL registry refused to
+ *     load the skill ("source must be a string") — so this stub validates both rules.
  */
 const skillCatalog = new Map()
 const registered = []
+const RUNTIME_PROVIDER = 'runtime'
 const fakeSkills = {
+  /** Mirrors the registry's own `validateRuntimeSkill`. */
+  validateRuntimeSkill(skill) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(skill.name)) throw new Error(`invalid skill name "${skill.name}"`)
+    if (typeof skill.description !== 'string' || skill.description.length === 0) {
+      throw new Error(`skill "${skill.name}" requires a description`)
+    }
+  },
+  /** Mirrors `validateDefinition`, which is what a LOAD goes through. */
+  validateDefinition(skill) {
+    for (const field of ['name', 'description', 'source', 'provider', 'content']) {
+      if (typeof skill[field] !== 'string') {
+        throw new TypeError(`loaded skill "${skill.name}" ${field} must be a string`)
+      }
+    }
+    if (skill.whenToUse !== undefined && typeof skill.whenToUse !== 'string') {
+      throw new TypeError(`loaded skill "${skill.name}" whenToUse must be a string`)
+    }
+    if (skill.path !== undefined && typeof skill.path !== 'string') {
+      throw new TypeError(`loaded skill "${skill.name}" path must be a string`)
+    }
+  },
   register(skill) {
+    this.validateRuntimeSkill(skill)
     if (skillCatalog.has(skill.name)) {
       // Mirrors the registry: a duplicate is ignored, not replaced.
       return () => {}
     }
-    skillCatalog.set(skill.name, skill)
-    registered.push(skill)
+    // The registry fills `provider` in. Loading the DEFINITION then re-validates it, which
+    // is exactly where a missing `source` surfaced.
+    const definition = { ...skill, provider: skill.provider ?? RUNTIME_PROVIDER }
+    this.validateDefinition(definition)
+    skillCatalog.set(skill.name, definition)
+    registered.push(definition)
     return () => { skillCatalog.delete(skill.name) }
   },
 }
@@ -226,6 +260,17 @@ ok('  带正文', String(skill.content).includes('步骤一'), JSON.stringify(St
 ok('  带 whenToUse', skill.whenToUse === '准备发布时', String(skill.whenToUse))
 ok('  带 path（供文件预览）', String(skill.path).endsWith('SKILL.md'), String(skill.path))
 ok('  默认两个接口都可调用', skill.invocation?.modelInvocable === true && skill.invocation?.userInvocable === true, JSON.stringify(skill.invocation))
+// LOAD-time validation requires a string `source`; without it the skill LISTS and is found
+// by name, then fails to load. That is the bug this stub now catches.
+ok('  带 source（否则列得出来、加载不了）', typeof skill.source === 'string' && skill.source.length > 0, String(skill.source))
+ok('  provider 由注册表补成 runtime', skill.provider === 'runtime', String(skill.provider))
+ok('  假注册表的校验规则能拒绝缺 source 的定义', (() => {
+  try {
+    // Same call the plugin makes, minus source: must throw, or this stub is too lenient.
+    fakeSkills.validateDefinition({ name: 'x', description: 'd', provider: 'runtime', content: 'c' })
+    return false
+  } catch { return true }
+})())
 
 console.log('')
 console.log('--- 卸载 ---')
