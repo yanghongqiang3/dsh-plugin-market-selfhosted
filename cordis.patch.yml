@@ -7,25 +7,32 @@
 #     row, not an insertion — so the package would silently never enter the
 #     composition.
 #
-#  2. A row's `id` is a short addressable name; `name` is what the loader
-#     imports, and it may be a package subpath (this row uses one).
+#  2. A row's `id` is a short addressable name; `name` is what the loader imports.
 #
 #  3. A package listed in `dsh.profile.bundles` is NOT itself a loader row. Being
 #     in `bundles` only means "apply this package's dsh.bundle.patch as a layer".
 #     Rows exist because a patch inserts them — which is what the insert below
 #     does. Copying files into node_modules mounts nothing on its own.
 #
-# On the empty host half in lib/bundle.js: keeping a bundle's own entry free of
-# behaviour is a convention worth following, but it is NOT what the activation
-# audit enforces. That audit only checks whether each row's fiber reached
-# `active`, and a row whose `apply` ran is active whatever it did.
+# One row, deliberately. A browser half (`dsh.client`) would need a SECOND row
+# whose `name` is the BARE package name — `dsh-client-modules` resolves a row's
+# package.json through `exactPackageSpecifier`, which returns undefined for any
+# specifier containing "/", after which `locatePkgJson` drops the row silently.
 #
-# Not done here, and why: mounting a browser half (`dsh.client`) would need an
-# extra row whose `name` is the BARE package name, plus a classic-script bundle at
-# `exports["./client"]` that registers itself via `window.__ModuleLoader__.load`
-# with an id equal to that name. This package has no build step, so it has none.
-# The in-app entry is injected through `webserver/index-inject` instead — see
-# README §4.1 for why that is the channel the desktop shell actually consumes.
+# That route is written but DISABLED: lib/client.js is a complete client module
+# (plain script, react from the platform seed, registrations for
+# `sidebar.panellist` and `sidebar.footer.action`), and the two-row arrangement
+# was tried. Both rows' modules imported successfully — proven with an import
+# probe, see the git history of lib/bundle.js — yet the activation audit still
+# reported the bare-name row as "failed to import", and a structurally identical
+# control package in the same profile did not. Until that difference is
+# explained, enabling it would put a needless
+# `warning: 1 entry did not activate` on every launch. The in-app entry is
+# injected through `webserver/index-inject` instead (README §4.1), which is
+# verified working.
+#
+# To re-enable: add `dsh.client` back to package.json, restore the `./client`
+# export, and add `- id: marketplace-client` / `name: dsh-plugin-marketplace`.
 
 - insert:
     - id: marketplace
@@ -33,4 +40,5 @@
 
 # Verify after a DSH restart: ~/.dsh/plugin-marketplace-diag.log should record
 #   [entry] registered webserver/index-inject rows (desktop + web shell)
-#   [register] registered 5/5 routes
+#   [register] registered 6/6 routes
+

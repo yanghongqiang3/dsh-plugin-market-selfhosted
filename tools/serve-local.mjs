@@ -60,6 +60,52 @@ const webServer = {
   },
 }
 
+/**
+ * Shell skeleton, mirroring the real sidebar's structure closely enough to anchor
+ * the injected entry: nav rows, a workspace region whose heading is followed by a
+ * session list, and a foot area beneath. `?shell=sidebar` uses it.
+ *
+ * The proportions matter, not just the presence of the parts: the shipping
+ * sidebar leaves roughly 18px between the last nav row and the workspace heading,
+ * which is too short for a row — the reason the entry cannot live there.
+ */
+const SHELL_WITH_SIDEBAR = `<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8" /><title>DeepSeek Harness (local shell stub)</title>
+  <style>
+    :root{--dsw-specific-sidebar-fill:#eceef2;--dsw-alias-bg-base:#f6f7f9;--dsw-alias-border-l1:#e6e8ec;--dsw-alias-label-secondary:#707784}
+    html,body{margin:0;height:100%}
+    .shell{display:flex;height:100%}
+    .side{width:269px;flex:none;background:var(--dsw-specific-sidebar-fill);border-right:1px solid var(--dsw-alias-border-l1);padding:8px;display:flex;flex-direction:column}
+    .nav{display:flex;align-items:center;gap:8px;height:36px;flex:none;border-radius:8px;padding:0 10px;background:#fff;color:#1d2129;font:13px system-ui}
+    .sec{margin-top:18px;display:flex;align-items:center;gap:8px;padding:0 10px;height:28px;flex:none;color:var(--dsw-alias-label-secondary);font:12px system-ui}
+    .list{display:flex;flex-direction:column;gap:4px;flex:none}
+    .row{display:flex;align-items:center;height:36px;border-radius:8px;padding:0 10px;background:#fff;color:#1d2129;font:13px system-ui}
+    .foot{margin-top:auto;display:flex;flex-direction:column;gap:4px}
+    .main{flex:1;background:var(--dsw-alias-bg-base)}
+  </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="side">
+        <div class="nav">新会话</div>
+        <div class="nav">插件</div>
+        <div class="sec" id="workspace-section">工作区</div>
+        <div class="list">
+          <div class="row">dsh</div>
+          <div class="row">内部插件市场方案设计</div>
+        </div>
+        <div class="foot">
+          <div class="row">设置</div>
+        </div>
+      </aside>
+      <div class="main"></div>
+    </div>
+    <div id="root"></div>
+  </body>
+</html>
+`
+
 const SHELL_INDEX = `<!doctype html>
 <html lang="en">
   <head><meta charset="utf-8" /><title>DeepSeek Harness (local shell stub)</title></head>
@@ -106,8 +152,10 @@ const server = http.createServer((req, res) => {
   }
 
   // The shell index: serve the stub through every registered tap.
+  // `?shell=sidebar` selects the skeleton that models the real sidebar, so the
+  // entry can be rendered where it will actually live.
   if (url.pathname === '/' || url.pathname === '/index.html') {
-    let html = SHELL_INDEX
+    let html = url.searchParams.get('shell') === 'sidebar' ? SHELL_WITH_SIDEBAR : SHELL_INDEX
     for (const tap of indexTaps) html = tap(html)
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
     res.end(html)
