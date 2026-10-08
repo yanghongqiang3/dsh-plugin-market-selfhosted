@@ -182,6 +182,23 @@ POST /dsh-market/install        { token, name, version, sha256 } → 下载 → 
 POST /dsh-market/uninstall      { name } → 删文件 + 摘注册
 ```
 
+### 1.2.1 页面顶部要为空
+
+DSH 的窗口是无边框的（`titleBarStyle: "hidden"`），Electron 把
+最小化/最大化/关闭三个按钮**画在渲染内容之上**（主进程里
+`titleBarOverlay: { height: 40 }`）。所以：
+
+- 页面在顶部**保留 40px 不渲染内容**（`body { padding-top: var(--titlebar) }`），
+  标题栏 `sticky` 也停在这条下面。否则本页自己的标题和右上角按钮会钻到窗口按钮底下。
+- **可拖拽区（`-webkit-app-region: drag`）必须避开右上角那 ~180px**。
+  我第一版让拖拽条横跨整个顶部，结果**它吞掉了关闭按钮的点击**——
+  点关闭变成了收起整个 DSH 窗口。现在拖拽条止于控件区左侧，控件角显式设为 `no-drag`。
+- 这两条只在桌面壳里生效（检测 `globalThis.dshDesktopBoot`）；浏览器里打开时
+  `--titlebar: 0`，不会多出空白。
+
+`tools/shoot-titlebar.mjs` 守这条：它把页面按桌面窗口尺寸渲染，画上窗口按钮，
+然后断言（a）拖拽条没有覆盖控件角、（b）控件左侧仍可拖拽、（c）标题与右上角按钮都在控件条下方。
+
 ### 1.3 安装时的四道关
 
 1. **服务端鉴权** —— `download` 会再判一次，无权限直接 403，一个字节都不发。

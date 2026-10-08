@@ -18,10 +18,39 @@
     }
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--label);
+  /**
+   * Room for the desktop window controls.
+   *
+   * The Electron window is frameless (titleBarStyle: "hidden") and draws its
+   * minimise/maximise/close overlay ON TOP of the renderer — electron main sets
+   * `titleBarOverlay: { height: 40 }`. Anything rendered in the top 40px sits
+   * under those buttons, which is what happened to this page's title and its
+   * top-right buttons.
+   *
+   * Two rules matter, and the second one bit us:
+   *
+   *  1. reserve the strip, and keep the page's own header below it;
+   *  2. the drag region must NOT span the whole strip. The overlay buttons live
+   *     in the top-right (~138x40 on Windows). A drag region covering them
+   *     swallows their clicks — collapsing the whole DSH window instead of
+   *     clicking close. So dragging is limited to the strip minus that corner,
+   *     and the corner is explicitly left non-draggable.
+   *
+   * `--titlebar: 0` when the page is opened in a normal browser tab.
+   */
+  :root{--titlebar:0px;--window-controls:0px}
+  body.chrome{--titlebar:40px;--window-controls:180px}
+  body{margin:0;background:var(--bg);color:var(--label);padding-top:var(--titlebar);
        font:13px/1.5 -apple-system,"Segoe UI",system-ui,"Microsoft YaHei",sans-serif}
+  /* Draggable title-bar strip, stopping short of the window controls. */
+  .chromebar{position:fixed;top:0;left:0;right:var(--window-controls);height:var(--titlebar);
+             z-index:3;-webkit-app-region:drag}
+  /* The controls' corner: never draggable, and never intercepts the click. */
+  .chromebar-controls{position:fixed;top:0;right:0;width:var(--window-controls);height:var(--titlebar);
+                      z-index:4;-webkit-app-region:no-drag;pointer-events:none}
   header{display:flex;gap:10px;align-items:center;padding:12px 18px;
-         border-bottom:1px solid var(--border1);background:var(--layer1);position:sticky;top:0;z-index:2}
+         border-bottom:1px solid var(--border1);background:var(--layer1);
+         position:sticky;top:var(--titlebar);z-index:2}
   h1{margin:0;font-size:15px;font-weight:600;margin-right:auto}
   .who{color:var(--label2);font-size:12px}
   .btn{border:1px solid var(--border2);background:var(--layer1);color:var(--label);
@@ -95,6 +124,8 @@
 </style>
 </head>
 <body>
+<div class="chromebar" aria-hidden="true"></div>
+<div class="chromebar-controls" aria-hidden="true"></div>
 <header>
   <h1>内部插件市场</h1>
   <span class="who" id="who"></span>
@@ -220,6 +251,15 @@ const $ = (id) => document.getElementById(id)
 const TOKEN_KEY = 'dsh.market.token'
 /** Which service the stored token belongs to — a token is not portable across services. */
 const SERVICE_KEY = 'dsh.market.service'
+
+/**
+ * Reserve the window-control strip only when running inside the desktop shell.
+ *
+ * The shell exposes `globalThis.dshDesktopBoot` before this page's scripts run.
+ * In a normal browser tab there is no overlay, so the strip stays collapsed —
+ * otherwise the page would carry a mysterious 40px gap.
+ */
+if (globalThis.dshDesktopBoot !== undefined) document.body.classList.add('chrome')
 
 let catalog = null
 let adminGroups = []
