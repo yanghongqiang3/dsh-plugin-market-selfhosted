@@ -111,18 +111,23 @@ mount()
 for (let i = 0; i < 80 && routes.length === 0; i += 1) await new Promise((r) => setTimeout(r, 50))
 const route = (path) => routes.find((r) => String(r.path) === path)
 
-const invoke = async (path, body) => {
+const invoke = async (path, body, { origin } = {}) => {
   let captured = null
   const listeners = new Map()
   const req = {
-    method: 'POST', url: path, headers: { 'content-type': 'application/json' },
+    method: 'POST', url: path,
+    headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
     on: (event, cb) => { if (!listeners.has(event)) listeners.set(event, []); listeners.get(event).push(cb); return req },
     destroy: () => {},
   }
   const emit = (event, arg) => { for (const cb of listeners.get(event) ?? []) cb(arg) }
   setImmediate(() => { if (body !== undefined) emit('data', Buffer.from(JSON.stringify(body ?? {}))); emit('end') })
-  await route(path).handler(req, { writeHead: () => {}, end: (out) => { captured = out } })
-  try { return { status: 200, body: JSON.parse(String(captured)) } } catch { return { status: 0, body: null } }
+  let status = 200
+  await route(path).handler(req, {
+    writeHead: (code) => { status = code ?? 200 },
+    end: (out) => { captured = out },
+  })
+  try { return { status, body: JSON.parse(String(captured)) } } catch { return { status, body: null } }
 }
 
 const install = async (name, version) => {
@@ -165,6 +170,58 @@ console.log('--- 装好之后，服务端召回 ---')
     JSON.stringify(items))
   ok('  回执标明了类别', items.find((entry) => entry.name === SKILL)?.kind === 'skill',
     String(items.find((entry) => entry.name === SKILL)?.kind))
+  /**
+   * The receipt records a PAST removal, so lifting the recall must not erase it — the removal
+   * still happened. It also must not linger implying a CURRENT state, which is what the page
+   * did: it said 「服务端召回」 in the present tense and stayed there after the recall was
+   * cancelled, with no way to clear it.
+   *
+   * So: un-recall keeps the record, and dismissing is an explicit act.
+   */
+  await post('/dsh-market/admin/artifacts/recall',
+    { name: SKILL, version: '1.0.0', channel: 'stable', recalled: false }, token)
+  const stillThere = await reconcileRecalled()
+  ok('取消召回不会抹掉回执（移除确实发生过）',
+    receipt().some((entry) => entry.name === SKILL), JSON.stringify(stillThere))
+  ok('  而且不会把已移除的东西装回来', !existsSync(skillDir(SKILL)))
+  // ...but the client's own inventory no longer reports it, so nothing is removed again.
+  ok('  再次对账不会重复移除', stillThere.status === 'clean', JSON.stringify(stillThere))
+}
+
+console.log('')
+console.log('--- 提示可以清掉（否则它会永远停在屏幕上）---')
+{
+  const forDismiss = await install(SKILL, '1.0.0')
+  ok('先重新装上一个', forDismiss.body?.ok === true, JSON.stringify(forDismiss.body).slice(0, 70))
+  await post('/dsh-market/admin/artifacts/recall',
+    { name: SKILL, version: '1.0.0', channel: 'stable', recalled: true }, token)
+  process.env.MARKET_SERVICE_TOKEN = token
+  await reconcileRecalled()
+  ok('有回执可清', receipt().length > 0, JSON.stringify(receipt().map((e) => e.name)))
+  /**
+   * The same artifact was removed more than once in this probe (installed, recalled, removed,
+   * reinstalled, recalled, removed). The receipt must show it ONCE — it answers "what is gone",
+   * not "how many times".
+   */
+  const keys = receipt().map((entry) => `${entry.name}@${entry.version}`)
+  ok('同一项被移除多次只记一条',
+    new Set(keys).size === keys.length, JSON.stringify(keys))
+
+  // Without the page's origin the request must be refused: a foreign site cannot clear it.
+  const foreign = await invoke('/dsh-market/recalled/dismiss', {}, { origin: 'http://evil.example' })
+  ok('外部来源不能清掉提示', foreign.body?.code === 'E_FOREIGN_ORIGIN', JSON.stringify(foreign.body))
+  ok('  回执仍在', receipt().length > 0)
+
+  const own = await invoke('/dsh-market/recalled/dismiss', {}, { origin: `http://127.0.0.1:17901` })
+  ok('市场页可以清掉它', own.body?.ok === true, JSON.stringify(own.body))
+  ok('  文件已删除，重新加载后不再显示', receipt().length === 0 && !existsSync(RECEIPT))
+  const readBack = await invoke('/dsh-market/recalled')
+  ok('  接口也确认是空的', readBack.body?.count === 0, JSON.stringify(readBack.body))
+  // Housekeeping for the later sections, which assume a clean-ish state.
+  await post('/dsh-market/admin/artifacts/recall',
+    { name: SKILL, version: '1.0.0', channel: 'stable', recalled: false }, token)
+  const restore = await install(SKILL, '1.0.0')
+  ok('  恢复现场', restore.body?.ok === true, JSON.stringify(restore.body).slice(0, 60))
 }
 
 console.log('')
@@ -236,6 +293,18 @@ console.log('--- 服务端：召回的制品不再可分发 ---')
 console.log('')
 console.log('--- installed-status：目录不肯回答的那个问题 ---')
 {
+  /**
+   * The precondition is established HERE, not inherited from an earlier section.
+   *
+   * Relying on leftover state made this assertion fail once the section above started
+   * un-recalling things to test dismissal — a test that depends on where it sits in the file is
+   * a test that breaks for reasons unrelated to what it checks.
+   */
+  await post('/dsh-market/admin/artifacts/recall',
+    { name: SKILL, version: '1.0.0', channel: 'stable', recalled: true }, token)
+  await post('/dsh-market/admin/artifacts/recall',
+    { name: PLUGIN, version: '1.0.0', channel: 'stable', recalled: false }, token)
+
   const answer = await post('/dsh-market/installed-status', {
     items: [
       { name: PLUGIN, version: '1.0.0', channel: 'stable' },

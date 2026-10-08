@@ -1164,6 +1164,37 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   consoleSource5.includes('已安装的人不受影响，也不会被移除')
     ? ok('  改状态的弹窗说明了 revoked 的边界')
     : fail('  revoked 仍只提下载，读起来像"已处理"')
+
+  /**
+   * The receipt has to be clearable, and has to read as a PAST event.
+   *
+   * Reported: cancelling a recall left 「服务端召回，已从本机移除 1 项」 on screen forever. The
+   * wording was present-tense and nothing could dismiss it, so the page claimed something was
+   * being recalled when nothing was.
+   *
+   * Lifting the recall must NOT erase the record — the removal really happened — so the fix is:
+   * past tense, dated, and dismissible.
+   */
+  pluginSource5.includes('`${PREFIX}/recalled/dismiss`')
+    ? ok('提示可以清除（否则它会永远停在屏幕上）')
+    : fail('  提示无法清除 —— 取消召回后仍显示，读起来像当前状态')
+  const dismissGuarded = /recalled\/dismiss`[\s\S]{0,500}?ownOrigin\(req\)/.test(pluginSource5)
+  dismissGuarded
+    ? ok('  清除只允许市场页自己发起（外部页面不能清）')
+    : fail('  任意网页都能清掉这条提示')
+  marketSource2.includes('已按服务端要求从本机移除')
+    ? ok('  文案用过去时（记录发生过的事，不是当前状态）')
+    : fail('  文案仍是现在时 —— 取消召回后会读成"正在召回"')
+  marketSource2.includes('即使服务端已取消召回')
+    ? ok('  并说明取消召回不会把东西装回来')
+    : fail('  没有说明取消召回之后会怎样')
+  // Blindly appending showed the same artifact twice after a reinstall-and-recall cycle.
+  // `includes`, not a regex literal: a line starting with `/` after one ending in `)` is parsed
+  // as DIVISION. That mistake is now at seven occurrences, so the guard in run-all.mjs is what
+  // catches it — but not writing the literal is better than relying on the guard.
+  pluginSource5.includes('const merged = new Map()')
+    ? ok('  同一项被移除多次只记一条（回执回答"什么没了"）')
+    : fail('  回执会累积重复条目 —— 计数与内容对不上')
 }
 
 /**

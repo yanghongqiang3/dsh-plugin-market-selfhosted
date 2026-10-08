@@ -117,6 +117,7 @@
    */
   .recallbar{border:1px solid var(--error);border-radius:8px;padding:8px 12px;margin-bottom:10px;
              background:var(--layer1);color:var(--label);font-size:12px;line-height:1.6}
+  .recallbar .recall-head{display:flex;align-items:center;gap:10px;justify-content:space-between}
   .recallbar .recall-title{color:var(--error);font-weight:600}
   .recallbar .recall-list{margin-top:4px;white-space:pre-line;color:var(--label2);
                           font-family:ui-monospace,Consolas,monospace}

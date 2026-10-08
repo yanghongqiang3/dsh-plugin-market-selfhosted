@@ -392,6 +392,11 @@ async function loadInstalled() {
  * The service asked for it, so the removal is not the user's doing — saying nothing would leave
  * them hunting for a plugin that "disappeared". A failure to read the receipt is not worth an
  * error: the bar simply stays hidden.
+ *
+ * It is written in the PAST tense and carries a dismiss button. It used to say 「服务端召回」
+ * with no way to clear it, which read as a current state and stayed on screen forever — including
+ * long after the recall had been cancelled, so the page claimed something was being recalled when
+ * nothing was.
  */
 async function loadRecalled() {
   const bar = $('recalled')
@@ -404,10 +409,33 @@ async function loadRecalled() {
   bar.classList.toggle('hidden', entries.length === 0)
   if (entries.length === 0) return
 
-  const title = document.createElement('div')
+  const head = document.createElement('div')
+  head.className = 'recall-head'
+  const title = document.createElement('span')
   title.className = 'recall-title'
-  title.textContent = `服务端召回，已从本机移除 ${entries.length} 项`
-  bar.appendChild(title)
+  // Past tense, and dated: this is a record of something that happened, not an ongoing state.
+  const newest = Math.max(...entries.map((item) => Number(item.removedAt) || 0))
+  const when = newest > 0 ? `（${new Date(newest).toLocaleString()}）` : ''
+  title.textContent = `已按服务端要求从本机移除 ${entries.length} 项${when}`
+  head.appendChild(title)
+
+  const dismiss = document.createElement('button')
+  dismiss.className = 'btn btn-mini'
+  dismiss.textContent = '知道了'
+  dismiss.title = '清除这条提示（不影响已经移除的内容，也不会把它们装回来）'
+  dismiss.addEventListener('click', async () => {
+    dismiss.disabled = true
+    try {
+      await local('/dsh-market/recalled/dismiss', { method: 'POST' })
+      bar.classList.add('hidden')
+      bar.textContent = ''
+    } catch {
+      dismiss.disabled = false
+      status('清除提示失败，稍后再试。', true)
+    }
+  })
+  head.appendChild(dismiss)
+  bar.appendChild(head)
 
   const list = document.createElement('div')
   list.className = 'recall-list'
@@ -419,9 +447,10 @@ async function loadRecalled() {
 
   const note = document.createElement('div')
   note.className = 'recall-note'
-  note.textContent = entries.some((item) => item.kind !== 'skill')
+  note.textContent = (entries.some((item) => item.kind !== 'skill')
     ? '其中插件要重启 DSH 才彻底卸载；技能已即时生效。'
-    : '技能已即时生效。'
+    : '技能已即时生效。')
+    + '\n这是过去发生的事：即使服务端已取消召回，被移除的副本也不会自动装回来，需要各自重装。'
   bar.appendChild(note)
 }
 
