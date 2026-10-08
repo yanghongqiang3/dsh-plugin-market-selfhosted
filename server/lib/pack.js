@@ -11,6 +11,8 @@ import { createHash } from 'node:crypto'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join, normalize, resolve, sep } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { detectPackagePrefix, stripPrefixFromEntries } from './layout.js'
+import { looksLikeZip, readZip } from './zip.js'
 
 const BLOCK = 512
 
@@ -30,15 +32,29 @@ export function collectFiles(root, prefix = '', out = []) {
   return out
 }
 
-/** Build a deterministic .tar.gz of `root` containing exactly `files`. */
-export function packTarGz(root, files) {
+/**
+ * Build a deterministic .tar.gz from an in-memory name -> bytes map.
+ *
+ * The single packing implementation: `packTarGz` reads a directory into a map and calls
+ * this, and `normaliseArchive` calls it for a zip — so a zip converted at upload time
+ * produces byte-identical output to the same tree packed from disk, which is what keeps the
+ * recorded sha256 meaningful.
+ */
+export function packTarGzEntries(entries) {
   const blocks = []
-  for (const relative of [...files].sort()) {
-    const data = readFileSync(join(root, relative))
-    blocks.push(tarHeader(relative, data.length), data, padding(data.length))
+  for (const name of [...entries.keys()].sort()) {
+    const data = entries.get(name)
+    blocks.push(tarHeader(name, data.length), data, padding(data.length))
   }
   blocks.push(Buffer.alloc(1024)) // two zero blocks terminate the archive
   return gzipSync(Buffer.concat(blocks), { level: 9 })
+}
+
+/** Build a deterministic .tar.gz of `root` containing exactly `files`. */
+export function packTarGz(root, files) {
+  const entries = new Map()
+  for (const relative of [...files].sort()) entries.set(relative, readFileSync(join(root, relative)))
+  return packTarGzEntries(entries)
 }
 
 export function sha256(buffer) {
@@ -120,8 +136,9 @@ export function unpackToMap(buffer) {
  * docs/distributing.md.
  */
 export function inspectArchive(buffer) {
-  const raw = readTarGz(buffer)
-  for (const entry of raw.keys()) {
+  const raw = readAnyArchive(buffer)
+  if (raw.ok === false) return raw
+  for (const entry of raw.entries.keys()) {
     if (entry.startsWith('/') || /^[a-zA-Z]:/.test(entry)) {
       return { ok: false, code: 'E_ABSOLUTE_PATH', detail: `归档条目为绝对路径：${entry}` }
     }
@@ -131,29 +148,18 @@ export function inspectArchive(buffer) {
     }
   }
 
-  // Decide the layout once, from the entries, then read everything through it.
-  const files = new Map()
-  for (const [name, value] of raw) {
-    const stripped = name.startsWith('./') ? name.slice(2) : name
-    if (stripped === 'package.json') files.set('package.json', value)
-    if (stripped === 'package/package.json') files.set('package/package.json', value)
-  }
-  const hasRootPkg = files.get('package.json') !== undefined
-  const hasNestedPkg = files.get('package/package.json') !== undefined
-  if (!hasRootPkg && !hasNestedPkg) {
-    return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档内没有 package.json' }
-  }
-  if (hasRootPkg && hasNestedPkg) {
-    return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档同时存在根级与 package/ 下的 package.json，布局不明确' }
-  }
-  const prefix = hasRootPkg ? '' : 'package/'
+  /**
+   * Where the manifest is — decided by the SAME rule the client uses.
+   *
+   * This used to be inline here and absent on the client, which is how the service came to
+   * accept an npm-layout archive the client could not install. `detectPackagePrefix` is now
+   * shared by both, so they cannot drift again.
+   */
+  const layout = detectPackagePrefix(raw.entries.keys())
+  if (layout.ok === false) return layout
+  const prefix = layout.prefix
 
-  const files2 = new Map()
-  for (const [name, value] of raw) {
-    const stripped = name.startsWith('./') ? name.slice(2) : name
-    if (prefix !== '' && !stripped.startsWith(prefix)) continue
-    files2.set(prefix === '' ? stripped : stripped.slice(prefix.length), value)
-  }
+  const files2 = stripPrefixFromEntries(raw.entries, prefix)
 
   const pkgBytes = files2.get('package.json')
   if (!pkgBytes) return { ok: false, code: 'E_NOT_PACKAGE', detail: '归档内没有 package.json' }
@@ -292,10 +298,89 @@ export function parseSkillFrontmatter(text) {
   return { ok: true, name: fields.name, description: fields.description, whenToUse: fields.whenToUse ?? null }
 }
 
+/**
+ * Read an archive without caring which format it is.
+ *
+ * Sniffed by MAGIC BYTES, not by filename or content type: an upload named `.zip` that is
+ * really a tgz (or the reverse) should just work, and a client is not a reliable source of
+ * truth about its own bytes.
+ */
+export function readAnyArchive(buffer) {
+  if (looksLikeZip(buffer)) {
+    const result = readZip(buffer)
+    if (result.ok === false) return result
+    return { ok: true, format: 'zip', entries: result.entries }
+  }
+  try {
+    return { ok: true, format: 'targz', entries: readTarGz(buffer) }
+  } catch (error) {
+    /**
+     * Say what was actually found.
+     *
+     * This used to surface only the gzip decoder's complaint — "不是有效的 gzip 数据：
+     * incorrect header check" — for every non-gzip upload, including a perfectly good zip.
+     * The message named neither the problem nor the fix.
+     */
+    const head = Buffer.isBuffer(buffer) && buffer.length >= 2
+      ? [...buffer.subarray(0, 4)].map((b) => b.toString(16).padStart(2, '0')).join(' ')
+      : '(空)'
+    return {
+      ok: false,
+      // The existing code for "this upload is not an archive I can read". The zip-specific
+      // failures (zip64, encrypted, CRC) get their own codes because they have different
+      // fixes; this one means "wrong file, or not an archive at all".
+      code: 'E_BAD_ARCHIVE',
+      detail: `既不是 tar.gz 也不是 zip（文件头 ${head}）：${error?.message ?? error}`,
+    }
+  }
+}
+
+/**
+ * Return the canonical form of an archive: a FLAT tar.gz with the manifest at the root.
+ *
+ * Both a zip and a wrapper directory are uploader conveniences, not supported variants. A zip
+ * is repacked, and a wrapped archive is re-keyed through its prefix, so what gets stored is
+ * always the same shape — `package.json` at the root.
+ *
+ * Canonicalising the LAYOUT as well as the format is what makes the recorded sha256 depend on
+ * the TREE rather than on how someone happened to compress it. Otherwise the same package
+ * hashes differently as a zip, as `npm pack` output and as output of this repo's CLI, and
+ * "republishing an unchanged tree is a no-op" quietly stops holding.
+ *
+ * A flat tar.gz is returned UNTOUCHED. Repacking it would round-trip it through this module's
+ * reader, which is not guaranteed to preserve anything it does not model, so repacking happens
+ * only when there is a reason to.
+ *
+ * @returns {{ ok: true, archive: Buffer, converted: boolean, from: 'targz'|'zip', strippedPrefix: string }
+ *          | { ok: false, code: string, detail: string }}
+ */
+export function normaliseArchive(buffer) {
+  const raw = readAnyArchive(buffer)
+  if (raw.ok === false) return raw
+
+  const layout = detectPackagePrefix(raw.entries.keys())
+  if (layout.ok === false) return layout
+
+  const isZip = raw.format === 'zip'
+  if (!isZip && layout.prefix === '') {
+    return { ok: true, archive: buffer, converted: false, from: 'targz', strippedPrefix: '' }
+  }
+  return {
+    ok: true,
+    archive: packTarGzEntries(stripPrefixFromEntries(raw.entries, layout.prefix)),
+    converted: true,
+    from: isZip ? 'zip' : 'targz',
+    strippedPrefix: layout.prefix,
+  }
+}
+
 /** Round-trippable diagnostic used by tests: list the entries of an archive. */
 export function listEntries(buffer) {
-  return [...readTarGz(buffer).keys()]
+  const raw = readAnyArchive(buffer)
+  if (raw.ok === false) return []
+  return [...raw.entries.keys()]
 }
+
 
 /** Used by tests to prove an archive round-trips. */
 export function extractTarGz(buffer) {

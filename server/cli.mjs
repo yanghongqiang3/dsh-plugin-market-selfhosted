@@ -65,7 +65,7 @@ function packWithNpmRoot(root, pkg) {
   const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
   // `lib/plugin.js` imports the shared semver module, so it has to ship with the client.
   // Leaving it out yields a package that installs cleanly and then fails to import.
-  const INCLUDE_FILES = ['server/lib/version.js']
+  const INCLUDE_FILES = ['server/lib/version.js', 'server/lib/layout.js']
   const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
   const stage = mkdtempSync(join(tmpdir(), 'dsh-self-'))
   try {

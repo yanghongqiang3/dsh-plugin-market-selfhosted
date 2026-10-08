@@ -52,6 +52,7 @@ const SUITES = [
   ['自动登录', 'probe-autologin.mjs', []],
   ['技能安装', 'probe-skill-install.mjs', []],
   ['制品类型', 'probe-artifact-kind.mjs', []],
+  ['zip 发布', 'probe-zip-publish.mjs', []],
   ['目录筛选分页', 'probe-catalog-paging.mjs', []],
   // Needs a real browser; it reports SKIPPED rather than pretending to pass.
   ['安装页界面', 'probe-market-ui.mjs', []],

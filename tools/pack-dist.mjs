@@ -48,7 +48,7 @@ const ROOT = resolve(HERE, '..')
  * imports the packaged copy the way the loader does.
  */
 const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
-const INCLUDE_FILES = ['server/lib/version.js']
+const INCLUDE_FILES = ['server/lib/version.js', 'server/lib/layout.js']
 const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
 
 /**

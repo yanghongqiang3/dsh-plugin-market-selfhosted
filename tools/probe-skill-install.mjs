@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createApp } from '../server/index.mjs'
-import { packTarGz } from '../server/lib/pack.js'
+import { inspectArchive, packTarGz } from '../server/lib/pack.js'
 
 const work = mkdtempSync(join(tmpdir(), 'dsh-skill-'))
 const profileDir = join(work, 'profile')
@@ -356,6 +356,47 @@ for (let i = 0; i < 40 && !gone; i += 1) {
   gone = !skillCatalog.has('release-checklist')
 }
 ok('  卸载后即时移出目录', gone, JSON.stringify([...skillCatalog.keys()]))
+
+console.log('')
+console.log('--- 客户端能从 npm 布局的归档里安装（此前会 E_NOT_PACKAGE）---')
+/**
+ * A pre-existing defect, found while adding zip support.
+ *
+ * `inspectArchive` accepted an npm-layout archive (everything under `package/`) but the
+ * client looked up `package.json` at the archive ROOT only. So the market published, listed
+ * and served such an artifact and the CLIENT refused it at the last step — with nothing
+ * earlier hinting at a problem. Both sides now use `detectPackagePrefix` from
+ * `server/lib/layout.js`, so they cannot disagree again.
+ */
+{
+  const npmDir = join(work, 'npm-layout')
+  rmSync(npmDir, { recursive: true, force: true })
+  mkdirSync(join(npmDir, 'package', 'lib'), { recursive: true })
+  writeFileSync(join(npmDir, 'package', 'package.json'), JSON.stringify({
+    name: '@dsh-internal/npm-layout-plugin', version: '1.0.0',
+    dsh: { market: { owner: 'platform', summary: 'npm 布局' } },
+  }))
+  writeFileSync(join(npmDir, 'package', 'lib', 'plugin.js'), 'export function apply() {}\n')
+  const archive = packTarGz(npmDir, ['package/package.json', 'package/lib/plugin.js'])
+  ok('服务端接受 npm 布局', inspectArchive(archive).ok === true)
+
+  const published = app.artifacts.publishArchive(archive, { publishedBy: 'alice', state: 'published' })
+  ok('  可以发布', published?.name === '@dsh-internal/npm-layout-plugin', String(published?.name))
+
+  const catalogNow = await call('GET', '/dsh-market/catalog?limit=100', undefined, alice)
+  const target = catalogNow.body.entries.find((e) => e.name === '@dsh-internal/npm-layout-plugin')
+  const installed2 = await invoke('/dsh-market/install', {
+    token: alice, name: target.name, version: target.version,
+    sha256: target.sha256, channel: target.channel,
+  })
+  ok('  客户端装得了（此前 E_NOT_PACKAGE）', installed2.body?.ok === true,
+    `${installed2.body?.code ?? ''} ${installed2.body?.detail ?? ''}`.trim())
+  // The prefix must be STRIPPED, or the files land one level too deep and `apply` is not found.
+  const installedDir = join(profileDir, 'node_modules', ...target.name.split('/'))
+  ok('  文件落在包根（前缀被剥掉）', existsSync(join(installedDir, 'package.json')), installedDir)
+  ok('  子目录也在正确位置', existsSync(join(installedDir, 'lib', 'plugin.js')))
+  ok('  没有多出一层 package/', !existsSync(join(installedDir, 'package')))
+}
 
 console.log('')
 console.log('结论：')

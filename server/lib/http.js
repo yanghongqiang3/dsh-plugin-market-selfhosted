@@ -11,7 +11,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { evaluate, statusFor } from './policy.js'
-import { ArchiveError, inspectArchive, sha256 } from './pack.js'
+import { ArchiveError, inspectArchive, normaliseArchive, sha256 } from './pack.js'
 import { paginate } from './store.js'
 
 const MAX_JSON_BYTES = 64 * 1024
@@ -733,9 +733,44 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       const who = admin(req, res)
       if (!who) return
 
-      const archive = await readRawBody(req, maxUploadBytes)
-      if (archive.length === 0) {
-        json(res, 400, { ok: false, code: 'E_EMPTY_BODY', detail: '请求体为空，需要上传 .tar.gz' })
+      const uploaded = await readRawBody(req, maxUploadBytes)
+      if (uploaded.length === 0) {
+        json(res, 400, { ok: false, code: 'E_EMPTY_BODY', detail: '请求体为空，需要上传 .tar.gz 或 .zip' })
+        return
+      }
+
+      /**
+       * Normalise BEFORE anything else looks at the bytes.
+       *
+       * A zip is an uploader convenience, not a second stored format, so it is converted to
+       * the canonical tar.gz here — once, at the edge. Everything downstream (inspection,
+       * the previewed sha256, storage, the download route, the client's extractor) then sees
+       * exactly one format.
+       *
+       * The ORDER matters more than it looks: the preview advertises a sha256, and the client
+       * verifies the bytes it downloads against it. Hashing the UPLOADED bytes and storing
+       * the CONVERTED ones would advertise a hash that never matches — every install would
+       * fail the integrity check with a message about corruption.
+       */
+      let archive = uploaded
+      let convertedFromZip = false
+      let normaliseNote = null
+      try {
+        const normalised = normaliseArchive(uploaded)
+        if (normalised.ok === false) {
+          store.audit('artifact.reject', { code: normalised.code, by: who.username }, who.username)
+          json(res, 400, { ok: false, code: normalised.code, detail: normalised.detail })
+          return
+        }
+        archive = normalised.archive
+        convertedFromZip = normalised.from === 'zip'
+        // Reported to the publisher so "what got stored" is never a surprise.
+        normaliseNote = normalised.converted
+          ? { from: normalised.from, strippedPrefix: normalised.strippedPrefix }
+          : null
+      } catch (error) {
+        store.audit('artifact.reject', { reason: String(error?.message ?? error), by: who.username }, who.username)
+        json(res, 400, { ok: false, code: 'E_BAD_ARCHIVE', detail: String(error?.message ?? error) })
         return
       }
 
@@ -777,6 +812,11 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         owner: inspection.meta.owner ?? inspection.pkg.dsh?.market?.owner ?? '',
         summary: inspection.meta.summary ?? inspection.pkg.description ?? '',
         files: inspection.files.length,
+        // Reported so the pre-check can say "this zip will be stored as tar.gz" — the size
+        // and hash that follow are the STORED ones, not the uploaded ones.
+        convertedFromZip,
+        normalised: normaliseNote,
+        uploadedBytes: uploaded.length,
         sizeBytes: archive.length,
         sha256: sha256(archive),
       }

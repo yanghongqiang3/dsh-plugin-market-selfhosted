@@ -1028,6 +1028,62 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
 }
 
 /**
+ * Layout is a SHARED rule, and zip is accepted at upload.
+ *
+ * Both halves of the bug this guards against were real:
+ *
+ *   - `inspectArchive` accepted an npm-layout archive while the client looked for
+ *     `package.json` at the root only, so the market published and served an artifact the
+ *     client refused at the last step. One rule, two implementations, guaranteed to diverge.
+ *   - A Windows "compress this folder" zip wraps everything in a directory, which hit the
+ *     same wall.
+ */
+{
+  const layoutSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'layout.js'), 'utf8')
+  const packSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'pack.js'), 'utf8')
+  const pluginSource4 = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+  const zipSource = fs.readFileSync(path.join(dir, 'server', 'lib', 'zip.js'), 'utf8')
+
+  layoutSource.includes('export function detectPackagePrefix')
+    ? ok('布局规则是一个共享模块')
+    : fail('没有共享的布局规则 —— 两侧会各自实现并漂移')
+  packSource.includes('detectPackagePrefix') && pluginSource4.includes('detectPackagePrefix')
+    ? ok('  服务端与客户端都用它')
+    : fail('  有一侧没有用共享规则')
+  // Both packers must ship it, or the client fails to import at runtime.
+  for (const packer of ['tools/pack-dist.mjs', 'server/cli.mjs']) {
+    const source = fs.readFileSync(path.join(dir, packer), 'utf8')
+    source.includes("'server/lib/layout.js'")
+      ? ok(`  ${packer} 打包时带上 layout.js`)
+      : fail(`  ${packer} 没有带上 layout.js —— 客户端启动会 MODULE_NOT_FOUND`)
+  }
+  // The client must strip the prefix, not merely find the manifest.
+  pluginSource4.includes('stripPrefix: layout.prefix')
+    ? ok('  客户端解包时剥掉前缀（否则文件落深一层）')
+    : fail('  客户端找到了 manifest 但没有剥前缀')
+  zipSource.includes('inflateRawSync')
+    ? ok('服务端能读 zip（存储与客户端仍只有一种格式）')
+    : fail('服务端没有 zip 读取器')
+  packSource.includes('packTarGzEntries')
+    ? ok('  zip 会被重新打成规范的 tar.gz')
+    : fail('  zip 没有被归一化成 tar.gz')
+  // The upload route must normalise BEFORE hashing: the preview advertises a sha256 and the
+  // client verifies the bytes it downloads against it.
+  const uploadRoute = /'\/dsh-market\/publish',[\s\S]*?\n    \},/.exec(fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8'))?.[0] ?? ''
+  if (uploadRoute === '') {
+    fail('找不到发布上传路由')
+  } else if (uploadRoute.indexOf('normaliseArchive') < uploadRoute.indexOf('sha256(archive)')) {
+    ok('  先归一化再算哈希（否则客户端完整性校验必然失败）')
+  } else {
+    fail('  先算哈希再归一化 —— 预检给出的 sha256 与实际存储的字节不符')
+  }
+  const consoleSource2 = fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+  consoleSource2.includes('.zip')
+    ? ok('控制台的文件选择框接受 zip')
+    : fail('控制台不接受 zip —— 上传了也会被前端过滤掉')
+}
+
+/**
  * The SERVICE knows what an artifact is.
  *
  * `dsh.market.kind` used to exist only inside each package.json, so the console could not

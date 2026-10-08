@@ -129,15 +129,39 @@ for (const [label, condition] of claims) ok(label, condition)
    * copy where the file obviously exists. It happened: adding a shared semver module made
    * `lib/plugin.js` import `../server/lib/version.js` and the packer did not carry it.
    * `tools/probe-package-import.mjs` is the executable form of this check.
+   *
+   * Asserted per-FILE rather than against the whole literal list. Matching
+   * `['server/lib/version.js']` exactly meant that ADDING a second shared module —
+   * `layout.js`, for the archive-layout rule — failed a test whose subject was
+   * "version.js is carried". The pinned literal was the defect, not the change.
    */
+  const includedFiles = (source) => {
+    const match = /INCLUDE_FILES\s*=\s*\[([^\]]*)\]/.exec(source)
+    if (match === null) return null
+    return [...match[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+  }
+  const packerList = includedFiles(packer)
   ok(
     '打包工具包含 lib/plugin.js 依赖的 server/lib/version.js',
-    /INCLUDE_FILES\s*=\s*\['server\/lib\/version\.js'\]/.test(packer),
+    packerList !== null && packerList.includes('server/lib/version.js'),
+    JSON.stringify(packerList),
   )
+  const cliList = existsSync('server/cli.mjs') ? includedFiles(readFileSync('server/cli.mjs', 'utf8')) : null
   ok(
     'CLI 的打包器也包含同一个依赖',
-    existsSync('server/cli.mjs') && readFileSync('server/cli.mjs', 'utf8').includes("INCLUDE_FILES = ['server/lib/version.js']"),
+    cliList !== null && cliList.includes('server/lib/version.js'),
+    JSON.stringify(cliList),
   )
+  /**
+   * Derive the requirement from the IMPORTS instead of naming files by hand — that way the
+   * next shared module cannot be forgotten here either.
+   */
+  const pluginImports = [...readFileSync('lib/plugin.js', 'utf8')
+    .matchAll(/from\s+'\.\.\/server\/lib\/([\w.-]+)'/g)].map((m) => `server/lib/${m[1]}`)
+  const missing = pluginImports.filter((needed) => !(packerList ?? []).includes(needed))
+  ok('打包工具带上了 lib/plugin.js 引用的每一个 server/ 模块', missing.length === 0, JSON.stringify(missing))
+  const cliMissing = pluginImports.filter((needed) => !(cliList ?? []).includes(needed))
+  ok('CLI 打包器同样', cliMissing.length === 0, JSON.stringify(cliMissing))
 }
 
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')

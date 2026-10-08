@@ -146,7 +146,7 @@
         <section class="panel">
           <h2>选择归档</h2>
           <div class="form">
-            <input type="file" id="pub-file" accept=".tar.gz,.tgz,application/gzip" />
+            <input type="file" id="pub-file" accept=".tar.gz,.tgz,.zip,application/gzip,application/zip" />
             <div class="form-row">
               <label class="field">通道
                 <select id="pub-channel">
@@ -830,8 +830,19 @@ async function doCheck() {
    */
   const kindLabels = { skill: '技能', bundle: '组合包', plugin: '插件' }
   const kind = pendingPublish?.kind ?? 'plugin'
+  /**
+   * A zip is accepted but STORED as tar.gz, so the size and hash below describe the stored
+   * bytes rather than the file just chosen. Saying so matters: a publisher comparing the
+   * numbers against their own zip would otherwise think the upload was mangled.
+   */
+  const converted = pendingPublish?.convertedFromZip === true
+    ? `（上传的是 zip，${pendingPublish.uploadedBytes ?? 0} 字节；入库前会转成 tar.gz，`
+      + `下面的字节数与 sha256 描述的是转换后的版本。）\n\n`
+    : ''
   $('pub-preview').textContent =
-    `将发布：${kindLabels[kind] ?? kind} ${pendingPublish?.name ?? ''}@${pendingPublish?.version ?? ''}\n\n`
+    `将发布：${kindLabels[kind] ?? kind} ${pendingPublish?.name ?? ''}@${pendingPublish?.version ?? ''}\n`
+    + converted
+    + '\n'
     + JSON.stringify(result.body, null, 2)
   $('pub-preview').classList.remove('hidden')
   $('pub-commit').disabled = false
