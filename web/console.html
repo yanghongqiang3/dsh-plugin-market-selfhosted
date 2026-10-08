@@ -70,54 +70,52 @@
       <button class="btn navbtn on" data-panel="users">账号</button>
       <button class="btn navbtn" data-panel="groups">权限组</button>
       <button class="btn navbtn" data-panel="grants">组 → 插件规则</button>
-      <button class="btn navbtn" data-panel="identity">身份绑定</button>
       <button class="btn navbtn" data-panel="publish">发布插件</button>
       <button class="btn navbtn" data-panel="artifacts">制品</button>
     </nav>
 
     <div class="panes">
-      <!-- 账号 -->
+      <!--
+        账号
+        Bindings live HERE, in the account row, rather than in a tab of their own: a
+        binding is a property of an account, so an administrator looking at 「alice」
+        should see which DSH account she holds without navigating elsewhere and matching
+        two lists by eye. The table also says what an unbound row means instead of
+        leaving a blank cell.
+      -->
       <section class="pane" id="pane-users">
         <div class="note">
           权限模型：<code>用户 → 组 → 插件规则</code>。规则用 glob（如
           <code>@dsh-internal/dsh-plugin-*</code>）。<strong>默认拒绝</strong>：没有任何规则授予就不能安装；
           命中 <code>deny</code> 时 deny 优先。这些判定全部在服务端，客户端页面改不了。
+          <br />DSH 账号绑定由<strong>用户自己在安装页完成</strong>，管理员在这里查看与释放。
         </div>
-        <div class="panel-row">
-          <section class="panel">
-            <h2>账号<span class="meta" id="users-count"></span></h2>
-            <div class="table" id="users-table"></div>
-          </section>
-          <section class="panel">
-            <h2>新建账号</h2>
-            <div class="form">
-              <input type="text" id="nu-name" placeholder="用户名（内部工号/英文名）" />
-              <input type="text" id="nu-display" placeholder="显示名（可选）" />
-              <input type="password" id="nu-pass" placeholder="初始密码（首登强制修改）" />
-              <label class="checkbox"><input type="checkbox" id="nu-admin" /> 管理员角色</label>
-              <div class="chips" id="nu-groups"></div>
-              <button class="btn btn-primary" id="nu-submit">创建账号</button>
-            </div>
-          </section>
-        </div>
+        <section class="panel">
+          <h2>账号<span class="meta" id="users-count"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="users-q" placeholder="搜索用户名 / 显示名 / 角色" />
+            <button class="btn btn-primary" id="users-new">新建账号</button>
+          </div>
+          <div class="table" id="users-table"></div>
+          <div class="pager" id="users-pager"></div>
+        </section>
       </section>
 
       <!-- 权限组 -->
       <section class="pane hidden" id="pane-groups">
-        <div class="panel-row">
-          <section class="panel">
-            <h2>权限组</h2>
-            <div class="table" id="groups-table"></div>
-          </section>
-          <section class="panel">
-            <h2>新建组</h2>
-            <div class="form">
-              <input type="text" id="ng-id" placeholder="组 ID（英文，如 billing）" />
-              <input type="text" id="ng-desc" placeholder="说明（可选）" />
-              <button class="btn btn-primary" id="ng-submit">创建组</button>
-            </div>
-          </section>
+        <div class="note">
+          组只决定<strong>谁能装</strong>，不决定装什么——插件通过
+          <code>组 → 插件规则</code>里的 glob 规则授权，所以新插件只要名字匹配就自动生效。
         </div>
+        <section class="panel">
+          <h2>权限组<span class="meta" id="groups-count"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="groups-q" placeholder="搜索组 ID / 说明" />
+            <button class="btn btn-primary" id="groups-new">新建组</button>
+          </div>
+          <div class="table" id="groups-table"></div>
+          <div class="pager" id="groups-pager"></div>
+        </section>
       </section>
 
       <!-- 组 → 规则 -->
@@ -127,41 +125,13 @@
           <code>channel</code> 留空表示适用全部通道。
         </div>
         <section class="panel">
-          <h2>已有规则</h2>
-          <div class="table" id="grants-table"></div>
-          <div class="form inline">
-            <select id="gr-group"></select>
-            <input type="text" id="gr-pattern" placeholder="插件匹配（glob），如 @dsh-internal/dsh-plugin-*" />
-            <select id="gr-effect">
-              <option value="allow">allow（授予）</option>
-              <option value="deny">deny（拒绝，优先）</option>
-            </select>
-            <select id="gr-channel">
-              <option value="">全部通道</option>
-              <option value="stable">仅 stable</option>
-              <option value="beta">仅 beta</option>
-            </select>
-            <button class="btn btn-primary" id="gr-submit">添加规则</button>
+          <h2>已有规则<span class="meta" id="grants-count"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="grants-q" placeholder="搜索组 / 匹配式 / 效果" />
+            <button class="btn btn-primary" id="grants-new">添加规则</button>
           </div>
-        </section>
-      </section>
-
-      <!-- 身份绑定 -->
-      <section class="pane hidden" id="pane-identity">
-        <div class="note">
-          DSH 账号与市场账号是<strong>一对一</strong>绑定：一个 DSH 账号只能绑一个市场账号，
-          反过来一个市场账号也只能绑一个 DSH 账号。两个方向都受限，所以冲突提示会指出是哪一侧被占用。
-          <br />绑定由<strong>用户在 DSH 安装页自行完成</strong>（登录后点按钮，不会自动绑定）；
-          用户也可以自己解绑。这里用于查看，以及处理用户自己动不了的情况——
-          账号主人已离职、市场账号要改派。
-          同一对重复绑定是幂等的（刷新页面不会报错）。
-          <br />CLI：<code>node server/cli.mjs bind:list</code> /
-          <code>bind:rm --user &lt;市场账号&gt;</code> /
-          <code>bind:rm --dsh-user &lt;DSH 账号 ID&gt;</code>
-        </div>
-        <section class="panel">
-          <h2>当前绑定<span class="meta" id="bindings-count"></span></h2>
-          <div class="table" id="bindings-table"></div>
+          <div class="table" id="grants-table"></div>
+          <div class="pager" id="grants-pager"></div>
         </section>
       </section>
 
@@ -210,10 +180,16 @@
         <div class="note">
           改变制品状态会影响所有能安装它的人：<code>revoked</code> 后即使有权限也下载不到
           （服务端在 <code>download</code> 会再判一次，一个字节都不发）。
+          <br />「最新版本」取的是<strong>最高的已发布版本</strong>，不是最近发布的那一个——
+          所以从旧分支发个热修不会把客户端的「更新」指向更旧的版本。
         </div>
         <section class="panel">
-          <h2>已登记制品</h2>
+          <h2>已登记制品<span class="meta" id="artifacts-count"></span></h2>
+          <div class="toolbar">
+            <input type="search" id="artifacts-q" placeholder="搜索插件名 / 版本 / 状态" />
+          </div>
           <div class="table" id="artifacts-table"></div>
+          <div class="pager" id="artifacts-pager"></div>
         </section>
       </section>
     </div>
@@ -224,15 +200,30 @@
 <script src="/dsh-market/assets/shared.js"></script>
 <script>
 const S = globalThis.MarketShell
-const { $, state, service, show, status, setWho, chip, trow, miniButton } = S
+const { $, state, service, show, status, setWho, chip, trow, thead, miniButton, openForm, openConfirm, makePager } = S
 
-let users = []
-let groups = []
-let grants = []
-let artifacts = []
-let bindings = []
+/**
+ * Page state.
+ *
+ * Each list holds only the page it was given plus the total, so the console never keeps a
+ * whole table in memory and every filter is a server round trip. `bindings` is the
+ * exception and deliberately so: it holds the bindings for the accounts ON THIS PAGE,
+ * which is why the identity request carries `?usernames=`.
+ */
+const lists = {
+  users: { entries: [], total: 0, q: '' },
+  groups: { entries: [], total: 0, q: '' },
+  grants: { entries: [], total: 0, q: '' },
+  artifacts: { entries: [], total: 0, q: '' },
+}
+/** Bindings for the visible accounts, keyed by market username. */
+let bindingsByUser = new Map()
+/** Group list for the pickers inside dialogs; not the paginated table. */
+let allGroups = []
 /** Set by a successful dry run; 确认发布 reuses the exact bytes and options. */
 let pendingPublish = null
+
+const pager = {}
 
 // ------------------------------------------------------------------- 导航
 
@@ -245,236 +236,535 @@ function showPane(name) {
   }
 }
 
+/** Query string for one list: its page plus its search box. */
+function query(listName, extra = {}) {
+  const list = lists[listName]
+  const params = new URLSearchParams({
+    limit: String(pager[listName]?.params.limit ?? 20),
+    offset: String(pager[listName]?.params.offset ?? 0),
+  })
+  if (list.q) params.set('q', list.q)
+  for (const [key, value] of Object.entries(extra)) params.set(key, String(value))
+  return params
+}
+
+/**
+ * Wire a search box to a list.
+ *
+ * Debounced because a request per keystroke would race: two responses can arrive out of
+ * order and the slower one would win, showing results for a prefix the user has already
+ * moved past.
+ */
+function wireSearch(inputId, listName, reload) {
+  const input = $(inputId)
+  let timer = null
+  input.addEventListener('input', () => {
+    lists[listName].q = input.value.trim()
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      // A new filter invalidates the current offset: staying on page 7 of a 1-page
+      // result set would show an empty table.
+      pager[listName]?.reset()
+      reload()
+    }, 220)
+  })
+}
+
 // ------------------------------------------------------------------- 账号
 
-async function loadAdmin() {
-  const [u, g, gr, b] = await Promise.all([
-    service('/dsh-market/admin/users'),
-    service('/dsh-market/admin/groups'),
-    service('/dsh-market/admin/grants'),
-    service('/dsh-market/admin/identity'),
-  ])
-  users = u.body?.users ?? []
-  groups = g.body?.groups ?? []
-  grants = gr.body?.grants ?? []
-  bindings = b.body?.bindings ?? []
+/** The groups a user belongs to, as the service reports them. */
+const groupsOfUser = (user) => Array.isArray(user.groups) ? user.groups : []
+
+/**
+ * The create/edit dialog, shared by both flows.
+ *
+ * `mode` decides what is editable. The password field only exists when creating: changing
+ * a password is its own audited action with its own wording, and folding it into a general
+ * "edit" form invites changing a password by accident while renaming someone.
+ */
+function userDialog(mode, user) {
+  const creating = mode === 'create'
+  return openForm({
+    title: creating ? '新建账号' : `编辑账号 · ${user.username}`,
+    hint: creating
+      ? '初始密码首登强制修改。'
+      : '用户名是身份标识，不可更改。改密码请用「重置密码」。',
+    submitLabel: creating ? '创建账号' : '保存',
+    fields: [
+      { name: 'username', label: '用户名', value: user?.username ?? '', readonly: !creating, placeholder: '内部工号 / 英文名' },
+      { name: 'displayName', label: '显示名', value: user?.displayName ?? '', placeholder: '可选' },
+      ...(creating
+        ? [{ name: 'password', label: '初始密码', type: 'password', placeholder: '至少 12 位' }]
+        : []),
+      {
+        name: 'role',
+        label: '角色',
+        type: 'select',
+        value: user?.role ?? 'member',
+        options: [
+          { value: 'member', label: '普通（member）' },
+          { value: 'admin', label: '管理员（admin）' },
+        ],
+      },
+      {
+        name: 'status',
+        label: '状态',
+        type: 'select',
+        value: user?.status ?? 'active',
+        options: [
+          { value: 'active', label: '正常' },
+          { value: 'disabled', label: '停用（立刻吊销其会话）' },
+        ],
+        hint: '停用不会删除账号，也不会解除绑定。',
+      },
+      ...(creating
+        ? [{
+          name: 'groups',
+          label: '权限组',
+          type: 'chips',
+          value: [],
+          options: allGroups.map((group) => ({ value: group.id, label: group.id })),
+          hint: allGroups.length === 0 ? '还没有权限组，可先创建后再分配。' : '',
+        }]
+        : [{
+          name: 'groups',
+          label: '权限组',
+          type: 'chips',
+          // Membership is edited HERE rather than by inline chips in the table. The table
+          // renders one row per account as a result, which is what made it dense enough to
+          // read; a permanent second row per user doubled the height for a control that is
+          // used rarely.
+          value: groupsOfUser(user),
+          options: allGroups.map((group) => ({ value: group.id, label: group.id })),
+          hint: '点击切换所属组。规则按组授予，所以这里决定他能装哪些插件。',
+        }]),
+    ],
+    onSubmit: async (values) => {
+      if (creating) {
+        const result = await service('/dsh-market/admin/users', {
+          method: 'POST',
+          body: {
+            username: values.username.trim(),
+            password: values.password,
+            displayName: values.displayName.trim() || undefined,
+            role: values.role,
+            groups: values.groups ?? [],
+          },
+        })
+        if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+        status(`账号 ${values.username} 已创建。`)
+      } else {
+        // Separate calls, because each change is authorised and audited on its own. Firing
+        // them together would hide which one failed behind a single generic error.
+        if (values.role !== user.role) {
+          const result = await service('/dsh-market/admin/role', {
+            method: 'POST', body: { username: user.username, role: values.role },
+          })
+          if (!result.ok) return { ok: false, detail: `改角色失败：${result.body?.detail || result.body?.code}` }
+        }
+        if ((values.displayName ?? '').trim() !== (user.displayName ?? '')) {
+          const result = await service('/dsh-market/admin/displayName', {
+            method: 'POST', body: { username: user.username, displayName: values.displayName.trim() },
+          })
+          if (!result.ok) return { ok: false, detail: `改显示名失败：${result.body?.detail || result.body?.code}` }
+        }
+        if (values.status !== user.status) {
+          const next = await service('/dsh-market/admin/status', {
+            method: 'POST', body: { username: user.username, status: values.status },
+          })
+          if (!next.ok) return { ok: false, detail: `改状态失败：${next.body?.detail || next.body?.code}` }
+        }
+        // Membership is a diff, not a "set": the endpoint toggles one group at a time, and
+        // re-sending every membership would write audit entries for unchanged groups.
+        const before = new Set(groupsOfUser(user))
+        const after = new Set(values.groups ?? [])
+        for (const groupId of new Set([...before, ...after])) {
+          if (before.has(groupId) === after.has(groupId)) continue
+          const result = await service('/dsh-market/admin/membership', {
+            method: 'POST',
+            body: { username: user.username, groupId, on: after.has(groupId) },
+          })
+          if (!result.ok) {
+            return { ok: false, detail: `改权限组 ${groupId} 失败：${result.body?.detail || result.body?.code}` }
+          }
+        }
+        status(`${user.username} 已保存。`)
+      }
+      await loadUsers()
+      return { ok: true }
+    },
+  })
+}
+
+async function loadUsers() {
+  const result = await service(`/dsh-market/admin/users?${query('users')}`)
+  if (!result.ok) { status(result.body?.detail || result.body?.code || '读取账号失败', true); return }
+  lists.users.entries = result.body?.entries ?? []
+  lists.users.total = result.body?.total ?? 0
+  pager.users.setTotal(lists.users.total)
+
+  // Bindings for exactly the accounts on screen. Asking for the whole table would grow
+  // without bound and would mean joining two lists by hand here.
+  const names = lists.users.entries.map((user) => user.username)
+  bindingsByUser = new Map()
+  if (names.length > 0) {
+    const bound = await service(`/dsh-market/admin/identity?usernames=${encodeURIComponent(names.join(','))}`)
+    for (const binding of bound.body?.entries ?? []) {
+      bindingsByUser.set(binding.marketUsername, binding)
+    }
+  }
   renderUsers()
-  renderGroups()
-  renderGrants()
-  renderBindings()
 }
 
 function renderUsers() {
   const table = $('users-table')
   table.textContent = ''
-  $('users-count').textContent = `　${users.length} 个`
-  if (users.length === 0) {
+  const { entries, total } = lists.users
+  $('users-count').textContent = `　${total} 个`
+  // Headings first: without them the cells are unlabelled.
+  table.appendChild(thead([
+    ['账号', 'grow'], ['角色', 'col-role'], ['状态', 'col-status'],
+    ['权限组', 'col-groups'], ['DSH 绑定', 'col-bind'], ['', 'col-actions'],
+  ]))
+  if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = '还没有账号。用右侧表单或 CLI 创建第一个。'
+    empty.textContent = lists.users.q ? '没有匹配的账号。' : '还没有账号。'
     table.appendChild(empty)
-  }
-  for (const user of users) {
-    const isAdmin = user.role === 'admin'
-    const disabled = user.status === 'disabled'
-    // `POST /admin/status` takes `{ status: 'active' | 'disabled' }`; sending a
-    // boolean `disabled` was silently coerced to 'active' by the service, so
-    // 「停用」 appeared to do nothing.
-    const action = miniButton(disabled ? '启用' : '停用', async () => {
-      const result = await service('/dsh-market/admin/status', {
-        method: 'POST', body: { username: user.username, status: disabled ? 'active' : 'disabled' },
-      })
-      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`${user.username} 已${disabled ? '启用' : '停用'}。`)
-      await loadAdmin()
-    })
-    const reset = miniButton('重置密码', async () => {
-      const next = prompt(`为 ${user.username} 设置新密码（至少 12 位）`)
-      if (!next) return
-      const result = await service('/dsh-market/admin/password', {
-        method: 'POST', body: { username: user.username, newPassword: next },
-      })
-      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`${user.username} 的密码已重置，下次登录会被要求改密。`)
-      await loadAdmin()
-    })
-    // `POST /admin/role` takes `{ role }`, not `{ isAdmin }`.
-    const role = miniButton(isAdmin ? '取消管理员' : '设为管理员', async () => {
-      const result = await service('/dsh-market/admin/role', {
-        method: 'POST', body: { username: user.username, role: isAdmin ? 'member' : 'admin' },
-      })
-      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`${user.username} 的角色已改为 ${result.body?.role}。`)
-      await loadAdmin()
-    })
-    const memberships = groups.map((group) => chip(
-      group.id,
-      (user.groups ?? []).includes(group.id),
-      async () => {
-        const joined = (user.groups ?? []).includes(group.id)
-        const result = await service('/dsh-market/admin/membership', {
-          method: 'POST',
-          body: { username: user.username, groupId: group.id, member: !joined },
-        })
-        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-        await loadAdmin()
-      },
-    ))
-
-    const row = trow([
-      [user.username],
-      [user.displayName ?? '—'],
-      [isAdmin ? '管理员' : '普通', isAdmin ? 'ok' : ''],
-      [disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), disabled ? 'bad' : ''],
-    ])
-    const actions = document.createElement('div')
-    actions.className = 'cell-actions'
-    for (const button of [reset, role, action]) actions.appendChild(button)
-    row.appendChild(actions)
-    table.appendChild(row)
-
-    if (groups.length > 0) {
-      const groupsRow = document.createElement('div')
-      groupsRow.className = 'tr sub'
-      const label = document.createElement('div')
-      label.className = 'grow'
-      label.textContent = '权限组'
-      groupsRow.appendChild(label)
-      const chips = document.createElement('div')
-      chips.className = 'chips'
-      for (const c of memberships) chips.appendChild(c)
-      groupsRow.appendChild(chips)
-      table.appendChild(groupsRow)
-    }
-  }
-}
-
-function renderNewUserGroups() {
-  const box = $('nu-groups')
-  box.textContent = ''
-  if (groups.length === 0) {
-    const hint = document.createElement('span')
-    hint.className = 'meta'
-    hint.textContent = '还没有权限组，可先创建后再分配。'
-    box.appendChild(hint)
     return
   }
-  for (const group of groups) {
-    box.appendChild(chip(group.id, false, function toggle() {
-      const on = this.classList.toggle('on')
-      this.dataset.on = on ? '1' : ''
+  for (const user of entries) {
+    const isAdmin = user.role === 'admin'
+    const disabled = user.status === 'disabled'
+    const groups = groupsOfUser(user)
+    const binding = bindingsByUser.get(user.username)
+
+    /**
+     * One row per account.
+     *
+     * This was two — a main row plus an always-present 「权限组」 row of chips — which
+     * doubled the height and left room for five accounts on a screen. Membership moved
+     * into the edit dialog, so the row now reports it as text instead of editing it.
+     */
+    const row = trow([
+      ['', 'grow'],
+      [isAdmin ? '管理员' : '普通', 'col-role ' + (isAdmin ? 'ok' : '')],
+      [disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), 'col-status ' + (disabled ? 'bad' : '')],
+      [groups.length ? groups.join('、') : '—', 'col-groups'],
+      [binding ? (binding.dshName || binding.dshUserId) : '—', 'col-bind'],
+    ])
+
+    // The identity cell is built by hand: it carries the login name and the display name
+    // at two weights, which a plain text cell cannot express.
+    const who = row.firstChild
+    const name = document.createElement('span')
+    name.className = 'who-name'
+    name.textContent = user.username
+    who.appendChild(name)
+    if (user.displayName) {
+      const display = document.createElement('span')
+      display.className = 'who-display'
+      display.textContent = user.displayName
+      who.appendChild(display)
+    }
+
+    // The DSH account id is long and is what an administrator compares against a conflict
+    // message, so it stays available as a tooltip while the row shows the readable name.
+    if (binding) row.children[4].title = binding.dshUserId
+
+    const actions = document.createElement('div')
+    actions.className = 'cell-actions'
+    actions.appendChild(miniButton('编辑', () => userDialog('edit', user)))
+    actions.appendChild(miniButton('重置密码', () => {
+      openForm({
+        title: `重置密码 · ${user.username}`,
+        hint: '重置后该账号下次登录会被要求改密。',
+        submitLabel: '重置',
+        fields: [{ name: 'newPassword', label: '新密码', type: 'password', placeholder: '至少 12 位' }],
+        onSubmit: async (values) => {
+          const result = await service('/dsh-market/admin/password', {
+            method: 'POST', body: { username: user.username, newPassword: values.newPassword },
+          })
+          if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+          status(`${user.username} 的密码已重置，下次登录会被要求改密。`)
+          await loadUsers()
+          return { ok: true }
+        },
+      })
     }))
+    if (binding) {
+      actions.appendChild(miniButton('解绑', async () => {
+        const confirmed = await openConfirm({
+          title: '解除绑定',
+          body: `市场账号「${user.username}」← DSH「${binding.dshName || binding.dshUserId}」\n\n`
+            + '解绑后该 DSH 账号可以绑到别的市场账号，该市场账号也可以绑到别的 DSH 账号。',
+          confirmLabel: '解绑',
+          danger: true,
+        })
+        if (!confirmed) return
+        const result = await service('/dsh-market/admin/identity/unbind', {
+          method: 'POST', body: { dshUserId: binding.dshUserId },
+        })
+        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+        status(`已解绑：${user.username} ← DSH ${binding.dshUserId}。`)
+        await loadUsers()
+      }, true))
+    } else {
+      actions.appendChild(miniButton(disabled ? '启用' : '停用', async () => {
+        // `POST /admin/status` takes `{ status: 'active' | 'disabled' }`; sending a boolean
+        // `disabled` was silently coerced to 'active', so 「停用」 appeared to do nothing.
+        const result = await service('/dsh-market/admin/status', {
+          method: 'POST', body: { username: user.username, status: disabled ? 'active' : 'disabled' },
+        })
+        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+        status(`${user.username} 已${disabled ? '启用' : '停用'}。`)
+        await loadUsers()
+      }, !disabled))
+    }
+    row.appendChild(actions)
+    table.appendChild(row)
   }
 }
 
 // ------------------------------------------------------------------- 权限组
 
+async function loadGroups() {
+  const result = await service(`/dsh-market/admin/groups?${query('groups')}`)
+  if (!result.ok) { status(result.body?.detail || result.body?.code || '读取权限组失败', true); return }
+  lists.groups.entries = result.body?.entries ?? []
+  lists.groups.total = result.body?.total ?? 0
+  pager.groups.setTotal(lists.groups.total)
+  renderGroups()
+}
+
+function groupDialog(mode, group) {
+  const creating = mode === 'create'
+  return openForm({
+    title: creating ? '新建权限组' : `编辑权限组 · ${group.id}`,
+    hint: creating
+      ? '组 ID 是规则与成员关系引用的标识，创建后不可更改。'
+      : '只有说明可以改——组 ID 被规则和成员关系引用，改名会让它们难以对照。',
+    submitLabel: creating ? '创建组' : '保存',
+    fields: [
+      { name: 'id', label: '组 ID', value: group?.id ?? '', readonly: !creating, placeholder: '英文，如 billing' },
+      { name: 'description', label: '说明', value: group?.description ?? '', placeholder: '可选' },
+    ],
+    onSubmit: async (values) => {
+      if (creating) {
+        const result = await service('/dsh-market/admin/groups', {
+          method: 'POST', body: { id: values.id.trim(), description: values.description.trim() || undefined },
+        })
+        if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+        status(`组 ${values.id} 已创建。`)
+      } else {
+        const result = await service('/dsh-market/admin/groups/update', {
+          method: 'POST', body: { id: group.id, description: values.description.trim() },
+        })
+        if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+        status(`组 ${group.id} 已保存。`)
+      }
+      await refreshGroups()
+      await loadGroups()
+      return { ok: true }
+    },
+  })
+}
+
+/** The full group list, for the pickers and the per-user chips. Not the table. */
+async function refreshGroups() {
+  const result = await service('/dsh-market/admin/groups', undefined, { limit: '200' })
+  allGroups = result.body?.entries ?? result.body?.groups ?? []
+  void result
+}
+
 function renderGroups() {
   const table = $('groups-table')
   table.textContent = ''
-  if (groups.length === 0) {
+  const { entries, total } = lists.groups
+  $('groups-count').textContent = `　${total} 个`
+  table.appendChild(thead([
+    ['组 ID', 'grow'], ['说明', 'col-bind'], ['成员', 'col-role'], ['规则', 'col-status'], ['', 'col-actions'],
+  ]))
+  if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = '还没有权限组。'
-    table.appendChild(empty)
-  }
-  for (const group of groups) {
-    const members = users.filter((user) => (user.groups ?? []).includes(group.id)).map((user) => user.username)
-    const rules = grants.filter((grant) => grant.groupId === group.id).length
-    table.appendChild(trow([
-      [group.id],
-      [group.description ?? '—'],
-      [`${members.length} 人`, ''],
-      [`${rules} 条规则`, ''],
-    ]))
-  }
-  renderNewUserGroups()
-}
-
-// ------------------------------------------------------------------- 规则
-
-function renderGrants() {
-  const table = $('grants-table')
-  table.textContent = ''
-  const select = $('gr-group')
-  const previous = select.value
-  select.textContent = ''
-  for (const group of groups) {
-    const option = document.createElement('option')
-    option.value = group.id
-    option.textContent = group.id
-    select.appendChild(option)
-  }
-  if (groups.some((group) => group.id === previous)) select.value = previous
-
-  if (grants.length === 0) {
-    const empty = document.createElement('div')
-    empty.className = 'empty'
-    empty.textContent = '还没有规则。没有规则就意味着默认拒绝：谁都装不了任何插件。'
+    empty.textContent = lists.groups.q ? '没有匹配的组。' : '还没有权限组。'
     table.appendChild(empty)
     return
   }
-  for (const grant of grants) {
+  for (const group of entries) {
+    const members = (group.members ?? []).length
+    const rules = (group.grants ?? []).length
     const row = trow([
-      [grant.groupId],
-      [grant.pattern],
-      [grant.effect, grant.effect === 'deny' ? 'bad' : 'ok'],
-      [grant.channel || '全部通道', ''],
+      [group.id, 'grow'],
+      [group.description ?? '—', 'col-bind'],
+      [`${members} 人`, 'col-role'],
+      [`${rules} 条规则`, 'col-status'],
     ])
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
+    actions.appendChild(miniButton('编辑', () => groupDialog('edit', group)))
     actions.appendChild(miniButton('删除', async () => {
-      const result = await service('/dsh-market/admin/grants', {
-        method: 'POST',
-        body: { action: 'remove', groupId: grant.groupId, pattern: grant.pattern, channel: grant.channel ?? '' },
+      const confirmed = await openConfirm({
+        title: `删除权限组 ${group.id}`,
+        body: `该组有 ${members} 名成员、${rules} 条规则。\n\n`
+          + '删除会一并移除这些成员关系与规则——否则会留下一条谁也看不见、也撤销不掉的安装权限。',
+        confirmLabel: '删除',
+        danger: true,
       })
+      if (!confirmed) return
+      const result = await service('/dsh-market/admin/groups/delete', { method: 'POST', body: { id: group.id } })
       if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status('规则已删除。')
-      await loadAdmin()
+      status(`组 ${group.id} 已删除（清理成员 ${result.body?.memberships ?? 0} 条、规则 ${result.body?.grants ?? 0} 条）。`)
+      await refreshGroups()
+      await loadGroups()
+      await loadUsers()
     }, true))
     row.appendChild(actions)
     table.appendChild(row)
   }
 }
 
-// ------------------------------------------------------------------- 身份绑定
+// ------------------------------------------------------------------- 规则
 
-function renderBindings() {
-  const table = $('bindings-table')
+async function loadGrants() {
+  const result = await service(`/dsh-market/admin/grants?${query('grants')}`)
+  if (!result.ok) { status(result.body?.detail || result.body?.code || '读取规则失败', true); return }
+  lists.grants.entries = result.body?.entries ?? []
+  lists.grants.total = result.body?.total ?? 0
+  pager.grants.setTotal(lists.grants.total)
+  renderGrants()
+}
+
+const grantFields = (grant) => [
+  {
+    name: 'groupId',
+    label: '权限组',
+    type: 'select',
+    value: grant?.groupId ?? '',
+    options: allGroups.map((group) => ({ value: group.id, label: group.id })),
+    readonly: Boolean(grant),
+  },
+  {
+    name: 'pluginPattern',
+    label: '插件匹配（glob）',
+    value: grant?.pattern ?? '',
+    placeholder: '@dsh-internal/dsh-plugin-*',
+    readonly: false,
+  },
+  {
+    name: 'effect',
+    label: '效果',
+    type: 'select',
+    value: grant?.effect ?? 'allow',
+    options: [
+      { value: 'allow', label: 'allow（授予）' },
+      { value: 'deny', label: 'deny（拒绝，优先）' },
+    ],
+  },
+  {
+    name: 'channel',
+    label: '通道',
+    type: 'select',
+    value: grant?.channel ?? '',
+    options: [
+      { value: '', label: '全部通道' },
+      { value: 'stable', label: '仅 stable' },
+      { value: 'beta', label: '仅 beta' },
+    ],
+  },
+]
+
+function grantDialog(mode, grant) {
+  const creating = mode === 'create'
+  if (creating && allGroups.length === 0) {
+    status('还没有权限组，先创建一个组再添加规则。', true)
+    return
+  }
+  return openForm({
+    title: creating ? '添加规则' : `编辑规则 · ${grant.groupId}`,
+    hint: '匹配式是 glob。命中 deny 时 deny 优先，与添加顺序无关。',
+    submitLabel: creating ? '添加' : '保存',
+    fields: grantFields(grant),
+    onSubmit: async (values) => {
+      if (creating) {
+        const result = await service('/dsh-market/admin/grants', {
+          method: 'POST',
+          body: {
+            action: 'add',
+            groupId: values.groupId,
+            pluginPattern: values.pluginPattern.trim(),
+            effect: values.effect,
+            channel: values.channel || undefined,
+          },
+        })
+        if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+        status('规则已添加。')
+      } else {
+        const result = await service('/dsh-market/admin/grants/update', {
+          method: 'POST',
+          body: {
+            groupId: grant.groupId,
+            pluginPattern: grant.pattern,
+            nextPattern: values.pluginPattern.trim(),
+            effect: values.effect,
+            channel: values.channel || null,
+          },
+        })
+        if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+        status('规则已保存。')
+      }
+      await refreshGroups()
+      await loadGrants()
+      return { ok: true }
+    },
+  })
+}
+
+function renderGrants() {
+  const table = $('grants-table')
   table.textContent = ''
-  $('bindings-count').textContent = `　${bindings.length} 条`
-  if (bindings.length === 0) {
+  const { entries, total } = lists.grants
+  $('grants-count').textContent = `　${total} 条`
+  table.appendChild(thead([
+    ['权限组', 'col-role'], ['插件匹配', 'grow'], ['效果', 'col-status'], ['通道', 'col-role'], ['', 'col-actions'],
+  ]))
+  if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = '还没有绑定。用户在 DSH 安装页登录时会自动建立绑定。'
+    empty.textContent = lists.grants.q
+      ? '没有匹配的规则。'
+      : '还没有规则。没有规则就意味着默认拒绝：谁都装不了任何插件。'
     table.appendChild(empty)
     return
   }
-  for (const binding of bindings) {
+  for (const grant of entries) {
     const row = trow([
-      [binding.marketUsername],
-      [binding.dshName || '—'],
-      // The DSH account id is long and is the thing an administrator has to compare
-      // against a conflict message, so it is shown in full.
-      [binding.dshUserId],
-      [new Date(binding.boundAt).toLocaleString()],
+      [grant.groupId, 'col-role'],
+      [grant.pattern, 'grow'],
+      [grant.effect, 'col-status ' + (grant.effect === 'deny' ? 'bad' : 'ok')],
+      [grant.channel || '全部通道', 'col-role'],
     ])
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
-    actions.appendChild(miniButton('解绑', async () => {
-      const confirmed = confirm(
-        `解除绑定：市场账号「${binding.marketUsername}」← DSH「${binding.dshName || binding.dshUserId}」？\n\n`
-        + '解绑后该 DSH 账号可以绑到别的市场账号，该市场账号也可以绑到别的 DSH 账号。',
-      )
+    actions.appendChild(miniButton('编辑', () => grantDialog('edit', grant)))
+    actions.appendChild(miniButton('删除', async () => {
+      const confirmed = await openConfirm({
+        title: '删除规则',
+        body: `组 ${grant.groupId} 的规则「${grant.pattern}」（${grant.effect}）将被删除。`,
+        confirmLabel: '删除',
+        danger: true,
+      })
       if (!confirmed) return
-      // Unbind by DSH id: it is the side that identifies the row unambiguously.
-      const result = await service('/dsh-market/admin/identity/unbind', {
+      const result = await service('/dsh-market/admin/grants', {
         method: 'POST',
-        body: { dshUserId: binding.dshUserId },
+        body: { action: 'remove', groupId: grant.groupId, pattern: grant.pattern, channel: grant.channel ?? '' },
       })
       if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-      status(`已解绑：${binding.marketUsername} ← DSH ${binding.dshUserId}。`)
-      await loadAdmin()
+      status('规则已删除。')
+      await refreshGroups()
+      await loadGrants()
     }, true))
     row.appendChild(actions)
     table.appendChild(row)
@@ -486,10 +776,13 @@ function renderBindings() {
 function publishOptions() {
   const channel = $('pub-channel').value
   const state = $('pub-state').value
-  const query = new URLSearchParams()
-  if (channel) query.set('channel', channel)
-  if (state) query.set('state', state)
-  return query
+  // Named `params`, not `query`: a local called `query` would shadow the list-query
+  // helper above, and the failure would be a confusing "query is not a function" far
+  // from here.
+  const params = new URLSearchParams()
+  if (channel) params.set('channel', channel)
+  if (state) params.set('state', state)
+  return params
 }
 
 /**
@@ -502,9 +795,9 @@ function publishOptions() {
 async function uploadArchive(commit) {
   const file = $('pub-file').files[0]
   if (!file) { $('pub-err').textContent = '请先选择 .tar.gz 归档'; return null }
-  const query = publishOptions()
-  if (commit) query.set('commit', '1')
-  const response = await fetch(`/dsh-market/publish?${query.toString()}`, {
+  const params = publishOptions()
+  if (commit) params.set('commit', '1')
+  const response = await fetch(`/dsh-market/publish?${params.toString()}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/gzip',
@@ -552,50 +845,83 @@ async function doCommit() {
 // ------------------------------------------------------------------- 制品
 
 async function loadArtifacts() {
-  const result = await service('/dsh-market/admin/artifacts')
-  artifacts = result.body?.artifacts ?? []
+  const result = await service(`/dsh-market/admin/artifacts?${query('artifacts')}`)
+  if (!result.ok) { status(result.body?.detail || result.body?.code || '读取制品失败', true); return }
+  lists.artifacts.entries = result.body?.entries ?? []
+  lists.artifacts.total = result.body?.total ?? 0
+  pager.artifacts.setTotal(lists.artifacts.total)
   renderArtifacts()
 }
 
 function renderArtifacts() {
   const table = $('artifacts-table')
   table.textContent = ''
-  if (artifacts.length === 0) {
+  const { entries, total } = lists.artifacts
+  $('artifacts-count').textContent = `　${total} 个`
+  table.appendChild(thead([
+    ['插件', 'grow'], ['版本', 'col-role'], ['通道', 'col-role'],
+    ['状态', 'col-status'], ['大小', 'col-status'], ['', 'col-actions'],
+  ]))
+  if (entries.length === 0) {
     const empty = document.createElement('div')
     empty.className = 'empty'
-    empty.textContent = '还没有已登记的制品。'
+    empty.textContent = lists.artifacts.q ? '没有匹配的制品。' : '还没有已登记的制品。'
     table.appendChild(empty)
     return
   }
   const states = ['draft', 'review', 'published', 'revoked']
-  for (const artifact of artifacts) {
+  for (const artifact of entries) {
     const row = trow([
-      [artifact.name],
-      [artifact.version],
-      [artifact.channel],
-      [artifact.state, artifact.state === 'published' ? 'ok' : (artifact.state === 'revoked' ? 'bad' : '')],
-      [`${artifact.sizeBytes ?? 0} B`, ''],
+      [artifact.name, 'grow'],
+      [artifact.version, 'col-role'],
+      [artifact.channel, 'col-role'],
+      [artifact.state, 'col-status ' + (artifact.state === 'published' ? 'ok' : (artifact.state === 'revoked' ? 'bad' : ''))],
+      [`${artifact.sizeBytes ?? 0} B`, 'col-status'],
     ])
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
-    for (const next of states) {
-      if (next === artifact.state) continue
-      actions.appendChild(miniButton(`→ ${next}`, async () => {
-        const result = await service('/dsh-market/admin/artifacts/state', {
-          method: 'POST',
-          body: { name: artifact.name, version: artifact.version, channel: artifact.channel, state: next },
-        })
-        if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-        status(`${artifact.name}@${artifact.version} 状态改为 ${next}。`)
-        await loadArtifacts()
-      }, next === 'revoked'))
-    }
+    // Replacing four one-click "→ state" buttons with one dialog: those buttons made an
+    // irreversible change (revoked) a single click away, with no statement of what it
+    // would do. The dialog names the consequence.
+    actions.appendChild(miniButton('改状态', () => {
+      openForm({
+        title: `${artifact.name}@${artifact.version}`,
+        hint: artifact.state === 'published'
+          ? '改成 revoked 后，即使有人被授予权限也下载不到。'
+          : '只有 published 状态可以被安装。',
+        submitLabel: '保存',
+        fields: [{
+          name: 'state',
+          label: `状态（当前 ${artifact.state}）`,
+          type: 'select',
+          value: artifact.state,
+          options: states.map((value) => ({ value, label: value })),
+        }],
+        onSubmit: async (values) => {
+          if (values.state === artifact.state) return { ok: true }
+          const result = await service('/dsh-market/admin/artifacts/state', {
+            method: 'POST',
+            body: { name: artifact.name, version: artifact.version, channel: artifact.channel, state: values.state },
+          })
+          if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+          status(`${artifact.name}@${artifact.version} 状态改为 ${values.state}。`)
+          await loadArtifacts()
+          return { ok: true }
+        },
+      })
+    }))
     row.appendChild(actions)
     table.appendChild(row)
   }
 }
 
 // ------------------------------------------------------------------- 装配
+
+/** Everything the console shows, in one round of requests. */
+async function loadAll() {
+  await refreshGroups()
+  await Promise.all([loadUsers(), loadGroups(), loadGrants(), loadArtifacts()])
+}
 
 S.onAuthenticated(async () => {
   setWho(state.me?.displayName ?? state.me?.username ?? '')
@@ -610,8 +936,7 @@ S.onAuthenticated(async () => {
   }
   $('refresh').classList.remove('hidden')
   $('logout').classList.remove('hidden')
-  await loadAdmin()
-  await loadArtifacts()
+  await loadAll()
   show('console')
 })
 
@@ -623,8 +948,7 @@ $('denied-logout').addEventListener('click', S.doLogout)
 $('noService-retry').addEventListener('click', () => location.reload())
 $('refresh').addEventListener('click', async () => {
   status('')
-  await loadAdmin()
-  await loadArtifacts()
+  await loadAll()
 })
 for (const button of document.querySelectorAll('.navbtn')) {
   button.addEventListener('click', () => showPane(button.dataset.panel))
@@ -637,60 +961,27 @@ $('pub-file').addEventListener('change', () => {
 $('pub-check').addEventListener('click', doCheck)
 $('pub-commit').addEventListener('click', doCommit)
 
-$('nu-submit').addEventListener('click', async () => {
-  const username = $('nu-name').value.trim()
-  const password = $('nu-pass').value
-  if (!username || !password) { status('用户名与初始密码都要填。', true); return }
-  const selected = [...document.querySelectorAll('#nu-groups .chip.on')].map((el) => el.textContent)
-  const result = await service('/dsh-market/admin/users', {
-    method: 'POST',
-    body: {
-      username,
-      password,
-      displayName: $('nu-display').value.trim() || undefined,
-      // `POST /admin/users` takes `{ role }`, not `{ isAdmin }`.
-      role: $('nu-admin').checked ? 'admin' : 'member',
-      groups: selected,
-    },
-  })
-  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-  status(`账号 ${username} 已创建。`)
-  $('nu-name').value = $('nu-display').value = $('nu-pass').value = ''
-  $('nu-admin').checked = false
-  await loadAdmin()
-})
+// One pager per list, each wired to its own loader. Built before the first load so the
+// requests carry the initial limit/offset.
+for (const [name, load] of Object.entries({
+  users: loadUsers,
+  groups: loadGroups,
+  grants: loadGrants,
+  artifacts: loadArtifacts,
+})) {
+  pager[name] = makePager({ mount: `${name}-pager`, pageSize: 20, onChange: () => load() })
+}
 
-$('ng-submit').addEventListener('click', async () => {
-  const id = $('ng-id').value.trim()
-  if (!id) { status('组 ID 必填。', true); return }
-  const result = await service('/dsh-market/admin/groups', {
-    method: 'POST', body: { id, description: $('ng-desc').value.trim() || undefined },
-  })
-  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-  status(`组 ${id} 已创建。`)
-  $('ng-id').value = $('ng-desc').value = ''
-  await loadAdmin()
-})
+wireSearch('users-q', 'users', loadUsers)
+wireSearch('groups-q', 'groups', loadGroups)
+wireSearch('grants-q', 'grants', loadGrants)
+wireSearch('artifacts-q', 'artifacts', loadArtifacts)
 
-$('gr-submit').addEventListener('click', async () => {
-  const groupId = $('gr-group').value
-  const pattern = $('gr-pattern').value.trim()
-  if (!groupId || !pattern) { status('要选组并填插件匹配。', true); return }
-  const result = await service('/dsh-market/admin/grants', {
-    method: 'POST',
-    body: {
-      action: 'add',
-      groupId,
-      pattern,
-      effect: $('gr-effect').value,
-      channel: $('gr-channel').value || undefined,
-    },
-  })
-  if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
-  status('规则已添加。')
-  $('gr-pattern').value = ''
-  await loadAdmin()
-})
+// Every create action opens a dialog. The forms are no longer permanently occupying a
+// column of the page, which is what made the table narrow and the layout look cramped.
+$('users-new').addEventListener('click', () => userDialog('create'))
+$('groups-new').addEventListener('click', () => groupDialog('create'))
+$('grants-new').addEventListener('click', () => grantDialog('create'))
 
 S.init({
   // This page is served BY the market service, so the service is simply wherever the

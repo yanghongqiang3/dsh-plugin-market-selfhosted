@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { evaluate, statusFor } from './policy.js'
 import { ArchiveError, inspectArchive, sha256 } from './pack.js'
+import { paginate } from './store.js'
 
 const MAX_JSON_BYTES = 64 * 1024
 /** Artifact uploads are binary and legitimately large; JSON stays tightly capped. */
@@ -334,18 +335,48 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     return caller.user
   }
 
-  route('GET', '/dsh-market/admin/users', (req, res) => {
+  /**
+   * Paged admin lists all speak the same query and the same response.
+   *
+   * `limit`/`offset`/`q` are read in one place so every list clamps identically and an
+   * out-of-range offset yields an empty page rather than an error — the console may ask
+   * for page 9 of a list that shrank to 2 pages while it was open.
+   *
+   * BOTH shapes are returned: `entries`/`total`/`limit`/`offset` (what the console uses)
+   * and the historical field name (`users`, `groups`, …) holding the page. The service is
+   * consumed by the CLI, the console and tests; changing the shape without leaving the old
+   * key in place would break callers that only wanted the list, for no benefit. The
+   * duplicated payload is one page, not the whole table.
+   */
+  const pageParams = (url) => ({
+    limit: url?.searchParams?.get('limit') ?? undefined,
+    offset: url?.searchParams?.get('offset') ?? undefined,
+    q: url?.searchParams?.get('q') ?? '',
+  })
+
+  route('GET', '/dsh-market/admin/users', (req, res, _caller, url) => {
     const who = admin(req, res)
     if (!who) return
+    const page = store.listUsersPage(pageParams(url))
     json(res, 200, {
       ok: true,
-      users: store.listUsers().map((user) => ({
+      entries: page.entries.map((user) => ({
         ...publicUser(store, user),
         status: user.status,
         mustChangePassword: user.mustChangePassword,
         lastLoginAt: user.lastLoginAt,
         createdAt: user.createdAt,
       })),
+      users: page.entries.map((user) => ({
+        ...publicUser(store, user),
+        status: user.status,
+        mustChangePassword: user.mustChangePassword,
+        lastLoginAt: user.lastLoginAt,
+        createdAt: user.createdAt,
+      })),
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
       audit: store.recentAudit(50),
     })
   }, { auth: 'none' })
@@ -372,8 +403,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     }
   }, { auth: 'none' })
 
-  route('POST', '/dsh-market/admin/password', async (req, res) => {
-    const who = admin(req, res)
+  route('POST', '/dsh-market/admin/password', async (req, res) => {    const who = admin(req, res)
     if (!who) return
     const body = await readBody(req)
     try {
@@ -415,10 +445,43 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     }
   }, { auth: 'none' })
 
-  route('GET', '/dsh-market/admin/groups', (req, res) => {
+  /**
+   * Change a display name.
+   *
+   * Its own route rather than part of a general "update user" call: every other field of
+   * an account is either an identity (username, immutable), an authorisation (role,
+   * status) or a credential (password) — each with its own audit action and consequence.
+   * A display name is purely presentational, and giving it the same shape as the rest is
+   * what keeps the audit log readable.
+   */
+  route('POST', '/dsh-market/admin/displayName', async (req, res) => {
     const who = admin(req, res)
     if (!who) return
-    json(res, 200, { ok: true, groups: store.listGroups() })
+    const body = await readBody(req)
+    try {
+      const updated = store.setDisplayName(
+        String(body?.username ?? ''),
+        String(body?.displayName ?? ''),
+        { by: who.username },
+      )
+      json(res, 200, { ok: true, displayName: updated.displayName ?? '' })
+    } catch (error) {
+      json(res, 400, { ok: false, code: 'E_DISPLAY_NAME_FAILED', detail: String(error?.message ?? error) })
+    }
+  }, { auth: 'none' })
+
+  route('GET', '/dsh-market/admin/groups', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    const page = store.listGroupsPage(pageParams(url))
+    json(res, 200, {
+      ok: true,
+      entries: page.entries,
+      groups: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+    })
   }, { auth: 'none' })
 
   route('POST', '/dsh-market/admin/groups', async (req, res) => {
@@ -438,6 +501,51 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     }
   }, { auth: 'none' })
 
+  /**
+   * Edit or delete an existing group.
+   *
+   * Only the description is editable: the ID is what grants and memberships reference,
+   * and letting it change would silently repoint every stored rule. Deleting removes the
+   * memberships and grants with it — leaving them behind would keep an install permission
+   * alive that no administrator can see, because the group it belonged to is gone.
+   */
+  route('POST', '/dsh-market/admin/groups/update', async (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    const body = await readBody(req)
+    const id = String(body?.id ?? '').trim()
+    if (!id) {
+      json(res, 400, { ok: false, code: 'E_BAD_REQUEST', detail: '需要 id' })
+      return
+    }
+    try {
+      const group = store.updateGroup(id, {
+        description: String(body?.description ?? ''),
+        by: who.username,
+      })
+      json(res, 200, { ok: true, group })
+    } catch (error) {
+      json(res, 404, { ok: false, code: 'E_NO_SUCH_GROUP', detail: String(error?.message ?? error) })
+    }
+  }, { auth: 'none' })
+
+  route('POST', '/dsh-market/admin/groups/delete', async (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    const body = await readBody(req)
+    const id = String(body?.id ?? '').trim()
+    if (!id) {
+      json(res, 400, { ok: false, code: 'E_BAD_REQUEST', detail: '需要 id' })
+      return
+    }
+    try {
+      const removed = store.deleteGroup(id, { by: who.username })
+      json(res, 200, { ok: true, ...removed })
+    } catch (error) {
+      json(res, 404, { ok: false, code: 'E_NO_SUCH_GROUP', detail: String(error?.message ?? error) })
+    }
+  }, { auth: 'none' })
+
   route('POST', '/dsh-market/admin/membership', async (req, res) => {
     const who = admin(req, res)
     if (!who) return
@@ -452,6 +560,47 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       json(res, 200, { ok: true, groups })
     } catch (error) {
       json(res, 400, { ok: false, code: 'E_MEMBERSHIP_FAILED', detail: String(error?.message ?? error) })
+    }
+  }, { auth: 'none' })
+
+  /**
+   * Every rule, flat and paged.
+   *
+   * Until now the console assembled this from each group's nested `grants`, which is why
+   * the rules table could not be paged or searched on its own. A flat list is also the
+   * honest shape: a rule belongs to a group, but it is still a row an administrator wants
+   * to sort and edit directly.
+   */
+  route('GET', '/dsh-market/admin/grants', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    const page = store.listGrantsPage(pageParams(url))
+    json(res, 200, {
+      ok: true,
+      entries: page.entries,
+      grants: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+    })
+  }, { auth: 'none' })
+
+  route('POST', '/dsh-market/admin/grants/update', async (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    const body = await readBody(req)
+    try {
+      const grant = store.updateGrant({
+        groupId: String(body?.groupId ?? ''),
+        pluginPattern: String(body?.pluginPattern ?? ''),
+        nextPattern: body?.nextPattern === undefined ? null : String(body.nextPattern),
+        effect: body?.effect,
+        channel: body?.channel ?? null,
+        by: who.username,
+      })
+      json(res, 200, { ok: true, grant })
+    } catch (error) {
+      json(res, 404, { ok: false, code: 'E_NO_SUCH_GRANT', detail: String(error?.message ?? error) })
     }
   }, { auth: 'none' })
 
@@ -577,19 +726,34 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     json(res, changed ? 200 : 404, { ok: changed, code: changed ? null : 'E_NOT_FOUND', state })
   }, { auth: 'none' })
 
-  route('GET', '/dsh-market/admin/artifacts', (req, res) => {
+  route('GET', '/dsh-market/admin/artifacts', (req, res, _caller, url) => {
     const who = admin(req, res)
     if (!who) return
+    const params = pageParams(url)
+    const decorated = artifacts.catalogRows().map((artifact) => ({
+      ...artifact,
+      versions: artifacts.listVersions(artifact.name).map((item) => ({
+        version: item.version,
+        channel: item.channel,
+        status: item.status,
+      })),
+    }))
+    const needle = String(params.q ?? '').trim().toLowerCase()
+    const filtered = needle === ''
+      ? decorated
+      : decorated.filter((artifact) =>
+        [artifact.name, artifact.version, artifact.channel, artifact.state, artifact.owner ?? '']
+          .some((field) => String(field ?? '').toLowerCase().includes(needle)))
+    // Same `paginate` helper the store uses, so clamping and the response shape cannot
+    // drift between a paged list that lives in the store and one that lives here.
+    const page = paginate(filtered, params.limit, params.offset)
     json(res, 200, {
       ok: true,
-      artifacts: artifacts.catalogRows().map((artifact) => ({
-        ...artifact,
-        versions: artifacts.listVersions(artifact.name).map((item) => ({
-          version: item.version,
-          channel: item.channel,
-          status: item.status,
-        })),
-      })),
+      entries: page.entries,
+      artifacts: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
     })
   }, { auth: 'none' })
 
@@ -751,10 +915,16 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
    * a conflict message names the other side, and an administrator has to be able to
    * look up which account that is before releasing anything.
    */
-  route('GET', '/dsh-market/admin/identity', (req, res) => {
+  route('GET', '/dsh-market/admin/identity', (req, res, _caller, url) => {
     const who = admin(req, res)
     if (!who) return
-    json(res, 200, { ok: true, bindings: store.listBindings() })
+    // `?usernames=a,b` narrows the answer to the accounts currently on screen, which is
+    // what lets the accounts table show each row's DSH binding without pulling the whole
+    // binding table. No filter means everything, so existing callers are unaffected.
+    const raw = url?.searchParams?.get('usernames') ?? ''
+    const usernames = raw === '' ? [] : raw.split(',').map((name) => name.trim()).filter(Boolean)
+    const rows = store.bindingsForMarketUsernames(usernames)
+    json(res, 200, { ok: true, bindings: rows, entries: rows, total: rows.length })
   }, { auth: 'none' })
 
   route('POST', '/dsh-market/admin/identity/unbind', async (req, res) => {

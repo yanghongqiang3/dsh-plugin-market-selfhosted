@@ -434,6 +434,10 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
 
   if (fs.existsSync(consolePath)) {
     const consolePage = stripComments(fs.readFileSync(consolePath, 'utf8'))
+    // Read here rather than at the bottom of the block: the stylesheet assertions below
+    // need it, and `const` is not hoisted.
+    const sharedCss = fs.readFileSync(path.join(dir, 'web', 'market.css'), 'utf8')
+    const sharedSource = fs.readFileSync(path.join(dir, 'web', 'shared.js'), 'utf8')
     const installs = ['/dsh-market/install', '/dsh-market/uninstall']
     const leaked = installs.filter((route) => consolePage.includes(route))
     if (leaked.length > 0) {
@@ -486,8 +490,18 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
     } else {
       ok('console uses the `role` field the service actually reports')
     }
-    const rolePayload = /role:\s*isAdmin\s*\?\s*'member'\s*:\s*'admin'/.test(consolePage)
-    if (rolePayload) {
+    /**
+     * The payload, not the spelling.
+     *
+     * The first version of this check matched one exact ternary
+     * (`role: isAdmin ? 'member' : 'admin'`). Replacing that expression with a `<select>`
+     * whose value is sent verbatim left the payload MORE correct and the check failing —
+     * a test pinned to a phrasing rather than to the thing that matters. What matters is
+     * that the body sent to `/admin/role` carries `role`.
+     */
+    const roleRoute = consolePage.includes('/dsh-market/admin/role')
+    const roleBody = /body:\s*\{[^}]*\brole:/.test(consolePage)
+    if (roleRoute && roleBody) {
       ok('console sends `{ role }` when changing a role')
     } else {
       fail('console does not send `{ role }` to /dsh-market/admin/role')
@@ -496,6 +510,60 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
       ok('console sends `{ status: "active" | "disabled" }` when toggling an account')
     } else {
       fail('console does not send `{ status }` to /dsh-market/admin/status')
+    }
+
+    /**
+     * The console uses the shared pagination and dialog primitives.
+     *
+     * The tables used to render whole lists with inline forms beside them, and every list
+     * rolled its own slicing. Asserting the PRIMITIVES are used is what stops a future
+     * pane from quietly going back to a bespoke table that paginates differently or
+     * reintroduces a permanent form column.
+     */
+    for (const [label, needle] of [
+      ['分页控件', 'makePager'],
+      ['弹窗表单', 'openForm'],
+      ['确认弹窗', 'openConfirm'],
+      ['列标题', 'thead'],
+    ]) {
+      consolePage.includes(needle) ? ok(`console 使用了共享的${label}`) : fail(`console 没有使用共享的${label}`)
+    }
+    // Server-side paging means every list request carries limit/offset.
+    if (/limit: String\(pager\[/.test(consolePage) || consolePage.includes("'limit'")) {
+      ok('console 的列表请求带 limit')
+    } else {
+      fail('console 的列表请求没有 limit —— 分页没有真正下推到服务端')
+    }
+    // Bindings belong in the account row; a separate tab must not come back.
+    if (/data-panel="identity"/.test(consolePage)) {
+      fail('console 又把「身份绑定」做成了独立 tab —— 绑定属于账号行')
+    } else {
+      ok('console 没有把绑定拆成独立 tab')
+    }
+    // Destructive actions must ask first.
+    if (consolePage.includes("await openConfirm(")) {
+      ok('console 的破坏性操作走确认弹窗')
+    } else {
+      fail('console 的破坏性操作没有确认步骤')
+    }
+    // An <dialog> dismissed with Escape fires `close` WITHOUT running our close helper,
+    // so the element must remove itself on that event or every Escape leaks a node.
+    if (/addEventListener\('close',\s*\(\)\s*=>\s*(dialog|dlg)\.remove\(\)\)/.test(sharedSource)) {
+      ok('shared 的弹窗在 close 事件上自清理（Esc 不泄漏节点）')
+    } else {
+      fail('shared 的弹窗没有监听 close 事件 —— 原生 Esc 关闭后会留下孤立节点')
+    }
+    // The one CSS bug that made every table in both surfaces unstyled: rules were written
+    // for `.trow` while the renderer emits `.tr`.
+    if (/^\s*\.tr\s*\{/m.test(sharedCss)) {
+      ok('market.css 为 .tr 定义了行样式（与 trow() 生成的类名一致）')
+    } else {
+      fail('market.css 没有 .tr 规则 —— 表格行会完全没有样式')
+    }
+    if (/^\s*\.trow\s*\{/m.test(sharedCss)) {
+      fail('market.css 仍在为 .trow 写样式，但渲染器生成的是 .tr')
+    } else {
+      ok('market.css 没有残留的 .trow 规则')
     }
   }
 

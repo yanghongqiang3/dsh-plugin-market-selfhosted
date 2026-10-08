@@ -233,12 +233,320 @@
     return row
   }
 
+  /**
+   * A header row for a `trow`-built table.
+   *
+   * Takes the SAME shape as `trow` — `[[text, cls], …]` — and for a reason: the column
+   * widths come from the classes, so a header cell and its body cell must carry the same
+   * one or the columns drift apart. Building it from `trow` makes that the caller's only
+   * option, rather than something to remember.
+   *
+   * The tables had no headings at all, so cells like 「普通」 and 「待改密」 were readable
+   * only by someone who already knew what the columns were.
+   */
+  function thead(children) {
+    const row = trow(children)
+    row.classList.add('head')
+    return row
+  }
+
   function miniButton(text, onClick, danger) {
     const button = global.document.createElement('button')
     button.className = 'btn btn-mini' + (danger ? ' btn-danger' : '')
     button.textContent = text
     button.addEventListener('click', onClick)
     return button
+  }
+
+  // ------------------------------------------------------------- modal dialogs
+  //
+  // Every create/edit form goes through this, so they cannot drift apart in behaviour:
+  // Esc closes, clicking the backdrop closes, focus starts in the first field, and the
+  // submit button locks while the request is in flight (a double-click on 「创建」 used
+  // to be able to fire two creates).
+  //
+  // The dialog lives in a <dialog> element, which gives focus trapping and the backdrop
+  // for free rather than re-implementing both.
+
+  /**
+   * `openForm({ title, hint, fields, submitLabel, onSubmit })`
+   *
+   * `fields` is an array of:
+   *   { name, label, type, value, placeholder, options, required, wide, hint }
+   * `type` is a normal input type, or `'select'` for `options`, or `'chips'` for a
+   * multi-select rendered as the same chips the tables use.
+   *
+   * `onSubmit(values)` returns `{ ok: true }` to close, or `{ ok: false, detail }` to
+   * keep the dialog open with the reason shown — a failed edit must not discard what
+   * the administrator typed.
+   */
+  function openForm(options) {
+    const dialog = global.document.createElement('dialog')
+    dialog.className = 'dlg'
+
+    const form = global.document.createElement('form')
+    form.className = 'dlg-form'
+    dialog.appendChild(form)
+
+    const heading = global.document.createElement('h2')
+    heading.textContent = options.title ?? ''
+    form.appendChild(heading)
+
+    if (options.hint) {
+      const hint = global.document.createElement('div')
+      hint.className = 'hint'
+      hint.textContent = options.hint
+      form.appendChild(hint)
+    }
+
+    const body = global.document.createElement('div')
+    body.className = 'dlg-body'
+    form.appendChild(body)
+
+    const inputs = {}
+    for (const field of options.fields ?? []) {
+      const wrap = global.document.createElement('label')
+      wrap.className = 'field' + (field.wide ? ' wide' : '')
+      const caption = global.document.createElement('span')
+      caption.textContent = field.label ?? field.name
+      wrap.appendChild(caption)
+
+      if (field.type === 'chips') {
+        const box = global.document.createElement('div')
+        box.className = 'chips'
+        inputs[field.name] = { kind: 'chips', box }
+        for (const choice of field.options ?? []) {
+          const on = (field.value ?? []).includes(choice.value)
+          box.appendChild(chip(choice.label ?? choice.value, on, function toggle() {
+            const now = this.classList.toggle('on')
+            this.dataset.on = now ? '1' : ''
+          }))
+        }
+        wrap.appendChild(box)
+      } else if (field.type === 'select') {
+        const select = global.document.createElement('select')
+        for (const choice of field.options ?? []) {
+          const option = global.document.createElement('option')
+          option.value = choice.value
+          option.textContent = choice.label ?? choice.value
+          select.appendChild(option)
+        }
+        select.value = field.value ?? ''
+        inputs[field.name] = { kind: 'input', el: select }
+        wrap.appendChild(select)
+      } else {
+        const input = global.document.createElement('input')
+        input.type = field.type ?? 'text'
+        input.value = field.value ?? ''
+        if (field.placeholder) input.placeholder = field.placeholder
+        if (field.readonly) input.readOnly = true
+        inputs[field.name] = { kind: 'input', el: input }
+        wrap.appendChild(input)
+      }
+
+      if (field.hint) {
+        const note = global.document.createElement('span')
+        note.className = 'meta'
+        note.textContent = field.hint
+        wrap.appendChild(note)
+      }
+      body.appendChild(wrap)
+    }
+
+    const error = global.document.createElement('div')
+    error.className = 'err'
+    form.appendChild(error)
+
+    const actions = global.document.createElement('div')
+    actions.className = 'dlg-actions'
+    const cancel = global.document.createElement('button')
+    cancel.type = 'button'
+    cancel.className = 'btn'
+    cancel.textContent = '取消'
+    const submit = global.document.createElement('button')
+    submit.type = 'submit'
+    submit.className = 'btn btn-primary'
+    submit.textContent = options.submitLabel ?? '保存'
+    actions.appendChild(cancel)
+    actions.appendChild(submit)
+    form.appendChild(actions)
+
+    const readValues = () => {
+      const values = {}
+      for (const [name, handle] of Object.entries(inputs)) {
+        if (handle.kind === 'chips') {
+          values[name] = [...handle.box.querySelectorAll('.chip.on')].map((el) => el.textContent)
+        } else {
+          values[name] = handle.el.value
+        }
+      }
+      return values
+    }
+
+    const close = () => {
+      dialog.close()
+      dialog.remove()
+    }
+    /**
+     * Remove the element however the dialog was dismissed.
+     *
+     * `close()` above is only one of the ways out: pressing Escape closes the dialog
+     * natively, which fires `close` WITHOUT running our helper. The element then stayed
+     * in the DOM forever — invisible (`<dialog>` without `open` is `display:none`), so it
+     * looked fine, but every Escape leaked a node with all its listeners. Found by
+     * `tools/probe-console-ui.mjs`: the `cancel` and `close` events both fired while the
+     * element was still queryable.
+     */
+    dialog.addEventListener('close', () => dialog.remove())
+    cancel.addEventListener('click', close)
+    // Clicking the backdrop closes. The dialog element itself is the backdrop area, so a
+    // click whose target IS the dialog (not a child) is a backdrop click.
+    dialog.addEventListener('click', (event) => { if (event.target === dialog) close() })
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault()
+      error.textContent = ''
+      submit.disabled = true
+      const label = submit.textContent
+      submit.textContent = '保存中…'
+      try {
+        const result = await options.onSubmit(readValues(), { close })
+        if (result && result.ok === false) {
+          error.textContent = result.detail ?? '保存失败'
+          return
+        }
+        close()
+      } catch (caught) {
+        error.textContent = String(caught?.message ?? caught)
+      } finally {
+        submit.disabled = false
+        submit.textContent = label
+      }
+    })
+
+    global.document.body.appendChild(dialog)
+    dialog.showModal()
+    const first = Object.values(inputs).find((handle) => handle.kind === 'input' && !handle.el.readOnly)
+    if (first) first.el.focus()
+    return { dialog, close, readValues }
+  }
+
+  /** A yes/no dialog for destructive actions, in place of `confirm()`. */
+  function openConfirm({ title, body, confirmLabel = '确定', danger = false }) {
+    return new Promise((resolve) => {
+      const dialog = global.document.createElement('dialog')
+      dialog.className = 'dlg'
+      const form = global.document.createElement('form')
+      form.className = 'dlg-form'
+      const heading = global.document.createElement('h2')
+      heading.textContent = title ?? '确认'
+      const text = global.document.createElement('div')
+      text.className = 'hint'
+      text.textContent = body ?? ''
+      const actions = global.document.createElement('div')
+      actions.className = 'dlg-actions'
+      const cancel = global.document.createElement('button')
+      cancel.type = 'button'
+      cancel.className = 'btn'
+      cancel.textContent = '取消'
+      const go = global.document.createElement('button')
+      go.type = 'submit'
+      go.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary')
+      go.textContent = confirmLabel
+      actions.appendChild(cancel)
+      actions.appendChild(go)
+      form.appendChild(heading)
+      form.appendChild(text)
+      form.appendChild(actions)
+      dialog.appendChild(form)
+
+      const finish = (answer) => {
+        dialog.close()
+        dialog.remove()
+        resolve(answer)
+      }
+      // Same leak as the form dialog: Escape fires `close` without running `finish`.
+      dialog.addEventListener('close', () => dialog.remove())
+      cancel.addEventListener('click', () => finish(false))
+      dialog.addEventListener('click', (event) => { if (event.target === dialog) finish(false) })
+      form.addEventListener('submit', (event) => { event.preventDefault(); finish(true) })
+      global.document.body.appendChild(dialog)
+      dialog.showModal()
+      go.focus()
+    })
+  }
+
+  // ---------------------------------------------------------------- pagination
+  //
+  // Server-side: the shell only reports which page is wanted and how many rows exist.
+  // Every list uses the same control so page size, wording and edge cases match.
+
+  const PAGE_SIZES = [10, 20, 50]
+
+  /**
+   * `makePager({ mount, pageSize, onChange })`
+   *
+   * Renders into `mount(id)` and calls `onChange({ limit, offset })` whenever the page or
+   * page size changes. It never holds the data — the caller re-fetches.
+   */
+  function makePager({ mount, pageSize = 20, onChange }) {
+    const state = { limit: pageSize, offset: 0, total: 0 }
+    const host = typeof mount === 'string' ? $(mount) : mount
+
+    const render = () => {
+      host.textContent = ''
+      const pages = Math.max(1, Math.ceil(state.total / state.limit))
+      const current = Math.floor(state.offset / state.limit) + 1
+
+      const info = global.document.createElement('span')
+      info.className = 'meta'
+      info.textContent = state.total === 0
+        ? '共 0 条'
+        : `共 ${state.total} 条　第 ${current} / ${pages} 页`
+      host.appendChild(info)
+
+      const go = (offset) => {
+        state.offset = Math.max(0, Math.min(offset, (pages - 1) * state.limit))
+        render()
+        onChange({ limit: state.limit, offset: state.offset })
+      }
+
+      const prev = miniButton('上一页', () => go(state.offset - state.limit))
+      prev.disabled = current <= 1
+      const next = miniButton('下一页', () => go(state.offset + state.limit))
+      next.disabled = current >= pages
+      const first = miniButton('首页', () => go(0))
+      first.disabled = current <= 1
+      const last = miniButton('末页', () => go((pages - 1) * state.limit))
+      last.disabled = current >= pages
+      for (const button of [first, prev, next, last]) host.appendChild(button)
+
+      const size = global.document.createElement('select')
+      for (const value of PAGE_SIZES) {
+        const option = global.document.createElement('option')
+        option.value = String(value)
+        option.textContent = `每页 ${value}`
+        size.appendChild(option)
+      }
+      size.value = String(state.limit)
+      size.addEventListener('change', () => {
+        // Keep the first visible row the same where possible. Jumping to row 0 on a page
+        // size change loses the reader's place for no reason.
+        const firstRow = state.offset
+        state.limit = Number(size.value)
+        go(Math.floor(firstRow / state.limit) * state.limit)
+      })
+      host.appendChild(size)
+    }
+
+    render()
+    return {
+      state,
+      setTotal(total) { state.total = total; render() },
+      reset() { state.offset = 0; render() },
+      render,
+      get params() { return { limit: state.limit, offset: state.offset } },
+    }
   }
 
   /**
@@ -335,7 +643,12 @@
     tag,
     chip,
     trow,
+    thead,
     miniButton,
+    openForm,
+    openConfirm,
+    makePager,
+    PAGE_SIZES,
     doLogin,
     doChangePassword,
     doLogout,

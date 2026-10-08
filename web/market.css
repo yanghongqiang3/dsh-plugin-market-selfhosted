@@ -98,11 +98,58 @@
          padding:12px 13px;margin-bottom:14px}
   .panel h2{font-size:13px;margin:0 0 10px;display:flex;gap:8px;align-items:baseline}
   .table{display:flex;flex-direction:column}
-  .trow{display:flex;gap:8px;align-items:center;justify-content:space-between;
-        border-bottom:1px solid var(--border1);padding:7px 2px;font-size:12.5px}
-  .trow:last-child{border-bottom:none}
-  .trow .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .trow .sub{color:var(--label2);font-size:11px}
+  /**
+   * Table rows.
+   *
+   * These rules said `.trow` while `trow()` in shared.js sets `className = 'tr'`, so
+   * NOTHING here ever applied: no flex, no row separator, no ellipsis. Every table in
+   * both surfaces rendered as a vertical stack of unstyled cells — which is exactly how
+   * they looked. `.tr` is the name the renderer actually uses; console.css already
+   * extended it, which is what made the mismatch survivable-looking rather than obvious.
+   */
+  .tr{display:flex;gap:10px;align-items:center;justify-content:space-between;
+      border-bottom:1px solid var(--border1);padding:8px 2px;font-size:12.5px}
+  .tr:last-child{border-bottom:none}
+  .tr:hover{background:var(--layer2)}
+  .tr .sub{color:var(--label2);font-size:11px}
+  /**
+   * Column widths.
+   *
+   * Every cell carries a class, and the HEADER cell carries the same one — that is what
+   * keeps the columns aligned. Without fixed widths the cells stayed content-sized and
+   * `space-between` scattered them: the name column took half the table while five short
+   * columns crowded the right edge.
+   */
+  .tr > div{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /**
+   * `flex-basis: 0` on the growing columns, not `auto`.
+   *
+   * With `auto` the column starts at its CONTENT width and then grows, so a header cell
+   * reading 「账号」 and a body cell reading 「user19 用户 19」 ended up different widths —
+   * and every column to their right was offset by ~14px. A zero basis makes the width a
+   * pure function of the available space, so the headings sit exactly over their cells
+   * whatever the content is.
+   */
+  .tr > .grow{flex:2 1 0}
+  .tr > .col-role{flex:0 0 56px}
+  .tr > .col-status{flex:0 0 64px}
+  .tr > .col-groups{flex:0 0 132px}
+  .tr > .col-bind{flex:1 1 0;color:var(--label2)}
+  /**
+   * A reserved width for the actions column, present in the header too.
+   *
+   * If the header's last cell were zero-width, the header's usable width would differ from
+   * the body's and every column to its left would shift. Reserving the same box in both
+   * rows is what makes the headings sit over the right cells.
+   */
+  .tr > .cell-actions,.tr > .col-actions{flex:0 0 auto;min-width:158px;justify-content:flex-end}
+  .tr.head{color:var(--label2);font-size:11px;font-weight:600;padding:4px 2px;
+           border-bottom:1px solid var(--border2)}
+  .tr.head:hover{background:transparent}
+  /* The identity cell carries two facts at two weights: the login name, which is what
+     administrators search for, and the human name, which disambiguates it. */
+  .who-name{color:var(--label)}
+  .who-display{color:var(--label2);font-size:11px;margin-left:6px}
   .form{display:flex;flex-direction:column;gap:8px;margin-top:12px;
         border-top:1px dashed var(--border1);padding-top:12px}
   .form.inline{flex-direction:row;flex-wrap:wrap;align-items:center}
@@ -127,3 +174,37 @@
          padding:8px 12px;margin:0 0 12px;border:1px solid var(--border1);border-radius:8px;
          background:var(--layer1)}
 .bindbar .meta{white-space:pre-line;margin-right:auto}
+
+/**
+ * Modal dialogs.
+ *
+ * Built on <dialog> so focus trapping, the backdrop and Esc-to-close come from the
+ * platform instead of being re-implemented. Only the surface styling is ours.
+ */
+.dlg{border:none;padding:0;background:transparent;max-width:min(560px,92vw);width:100%}
+.dlg::backdrop{background:rgba(0,0,0,.42)}
+.dlg-form{display:flex;flex-direction:column;gap:12px;background:var(--layer1);
+          color:var(--label);border:1px solid var(--border1);border-radius:12px;
+          padding:18px 20px;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+.dlg-form h2{margin:0;font-size:15px}
+.dlg-body{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto}
+.dlg-form .field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--label2)}
+.dlg-form .field > span:first-child{font-weight:600;color:var(--label)}
+.dlg-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:2px}
+
+/**
+ * Pagination.
+ *
+ * One control, used by every admin list, so page size, wording and edge cases cannot
+ * differ between tables. It reports the range and offers the four moves that matter.
+ */
+.pager{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+       margin-top:10px;padding-top:10px;border-top:1px solid var(--border1)}
+.pager .meta{margin-right:auto}
+.pager select{width:auto}
+.pager .btn[disabled]{opacity:.45;cursor:not-allowed}
+
+/* A toolbar row: search box on the left, the create action on the right. */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.toolbar input[type=search]{flex:1 1 200px;min-width:160px}
+.toolbar .btn{margin-left:auto}

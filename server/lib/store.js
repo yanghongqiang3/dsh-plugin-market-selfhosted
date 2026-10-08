@@ -20,6 +20,28 @@ import { rowToUser } from './db.js'
 
 export const DEFAULT_ADMIN = { username: 'admin', password: 'dsh-admin' }
 
+/** Hard ceiling on a page, so a stray `limit=100000` cannot be used to dump a table. */
+export const MAX_PAGE_SIZE = 200
+export const DEFAULT_PAGE_SIZE = 20
+
+/**
+ * Slice a list into a page, clamped to sane bounds.
+ *
+ * Every admin list goes through this, so `limit`/`offset` behave identically everywhere
+ * and an out-of-range offset yields an empty page rather than an error — the console has
+ * to be able to ask for page 9 of a list that shrank to 2 pages while it was open.
+ */
+export function paginate(rows, limit, offset) {
+  const size = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(limit) || DEFAULT_PAGE_SIZE))
+  const from = Math.max(0, Number(offset) || 0)
+  return {
+    entries: rows.slice(from, from + size),
+    total: rows.length,
+    limit: size,
+    offset: from,
+  }
+}
+
 export class Store {
   constructor(db) {
     this.db = db
@@ -59,6 +81,28 @@ export class Store {
       .prepare('SELECT * FROM users ORDER BY created_at')
       .all()
       .map((row) => this.decorate(rowToUser(row)))
+  }
+
+  /**
+   * One page of users, with the fields the search box is expected to match.
+   *
+   * Pagination happens HERE rather than in the SQL, because `decorate` already has to
+   * read every user's groups — doing that per page would be N+1 queries for the same
+   * answer. The admin tables are small (tens to hundreds of rows), so the cost of
+   * listing them is the group lookups, not the scan.
+   *
+   * Paging client-side was the alternative and was rejected: the browser would hold the
+   * whole table, and every future filter would have to re-implement the same slicing.
+   */
+  listUsersPage({ limit = 20, offset = 0, q = '' } = {}) {
+    const needle = String(q ?? '').trim().toLowerCase()
+    let rows = this.listUsers()
+    if (needle !== '') {
+      rows = rows.filter((user) =>
+        [user.username, user.displayName ?? '', user.role, user.status]
+          .some((field) => String(field).toLowerCase().includes(needle)))
+    }
+    return paginate(rows, limit, offset)
   }
 
   /** Adds the fields the admin UI shows without a second round trip. */
@@ -129,6 +173,20 @@ export class Store {
     return this.findUser(username)
   }
 
+  /**
+   * Change the human-facing name. Separate from role and status because it grants
+   * nothing and revokes nothing — it is the one editable account field with no
+   * consequence, which is exactly why it should not share their code path.
+   */
+  setDisplayName(username, displayName, { by = 'admin' } = {}) {
+    const user = this.findUser(username)
+    if (!user) throw new Error(`no such user: ${username}`)
+    const next = String(displayName ?? '').trim()
+    this.db.prepare('UPDATE users SET display_name = ? WHERE username = ?').run(next, username)
+    this.audit('user.displayName', { username, displayName: next }, by)
+    return this.findUser(username)
+  }
+
   // ------------------------------------------------------------------- groups
 
   listGroups() {
@@ -154,6 +212,55 @@ export class Store {
 
   findGroup(id) {
     return this.db.prepare('SELECT * FROM groups WHERE id = ?').get(id) ?? null
+  }
+
+  /** One page of groups, optionally filtered. Same shape as `listUsersPage`. */
+  listGroupsPage({ limit = 20, offset = 0, q = '' } = {}) {
+    const needle = String(q ?? '').trim().toLowerCase()
+    let rows = this.listGroups()
+    if (needle !== '') {
+      rows = rows.filter((group) =>
+        [group.id, group.name ?? '', group.description ?? '']
+          .some((field) => String(field).toLowerCase().includes(needle)))
+    }
+    return paginate(rows, limit, offset)
+  }
+
+  /**
+   * Change a group's description. The ID is the identity and is not editable.
+   *
+   * Renaming a group is deliberately NOT offered: the ID is what grants and memberships
+   * reference, and letting the two drift apart would make every stored rule harder to
+   * read. Only the human-facing description changes.
+   */
+  updateGroup(id, { description = '', by = 'admin' } = {}) {
+    const existing = this.findGroup(id)
+    if (!existing) throw new Error(`no such group: ${id}`)
+    this.db.prepare('UPDATE groups SET description = ? WHERE id = ?').run(description, id)
+    this.audit('group.update', { id, description }, by)
+    return this.findGroup(id)
+  }
+
+  /**
+   * Delete a group together with its memberships and grants.
+   *
+   * The cleanup is explicit because the alternative — leaving rows that reference a
+   * group that no longer exists — would make `listGroups` and `policy.evaluate` disagree
+   * about whether a rule exists, and a user could keep an install permission that no
+   * administrator can see or revoke.
+   */
+  deleteGroup(id, { by = 'admin' } = {}) {
+    const existing = this.findGroup(id)
+    if (!existing) throw new Error(`no such group: ${id}`)
+    const memberships = this.db.prepare('DELETE FROM memberships WHERE group_id = ?').run(id)
+    const grants = this.db.prepare('DELETE FROM grants WHERE group_id = ?').run(id)
+    this.db.prepare('DELETE FROM groups WHERE id = ?').run(id)
+    this.audit('group.delete', {
+      id,
+      memberships: Number(memberships.changes),
+      grants: Number(grants.changes),
+    }, by)
+    return { id, memberships: Number(memberships.changes), grants: Number(grants.changes) }
   }
 
   createGroup({ id, name, description = '', by = 'admin' }) {
@@ -212,6 +319,61 @@ export class Store {
       .run(groupId, pluginPattern)
     this.audit('grant.remove', { groupId, pluginPattern, removed: Number(result.changes) }, by)
     return Number(result.changes)
+  }
+
+  /** Every rule, flat, with its group — the shape an admin table wants. */
+  listGrants() {
+    return this.db
+      .prepare('SELECT * FROM grants ORDER BY group_id, plugin_pattern')
+      .all()
+      .map((row) => ({
+        groupId: row.group_id,
+        pattern: row.plugin_pattern,
+        pluginPattern: row.plugin_pattern,
+        effect: row.effect,
+        channel: row.channel ?? '',
+        createdAt: row.created_at,
+        createdBy: row.created_by,
+      }))
+  }
+
+  /** One page of rules, optionally filtered by group, effect or pattern. */
+  listGrantsPage({ limit = 20, offset = 0, q = '' } = {}) {
+    const needle = String(q ?? '').trim().toLowerCase()
+    let rows = this.listGrants()
+    if (needle !== '') {
+      rows = rows.filter((grant) =>
+        [grant.groupId, grant.pattern, grant.effect, grant.channel]
+          .some((field) => String(field ?? '').toLowerCase().includes(needle)))
+    }
+    return paginate(rows, limit, offset)
+  }
+
+  /**
+   * Change a rule in place.
+   *
+   * A grant is identified by (group, pattern) — there is no separate id — so "editing" is
+   * remove-then-add. Both halves are audited, and the new row is written before the old
+   * one is removed only when the pattern is unchanged; when the pattern changes there is
+   * nothing to collide with.
+   */
+  updateGrant({ groupId, pluginPattern, nextPattern = null, effect = 'allow', channel = null, by = 'admin' }) {
+    const existing = this.db
+      .prepare('SELECT * FROM grants WHERE group_id = ? AND plugin_pattern = ?')
+      .get(groupId, pluginPattern)
+    if (!existing) throw new Error(`no such grant: ${groupId} / ${pluginPattern}`)
+    const pattern = String(nextPattern ?? pluginPattern)
+    if (!pattern) throw new Error('pluginPattern required')
+    if (pattern !== pluginPattern) {
+      this.db.prepare('DELETE FROM grants WHERE group_id = ? AND plugin_pattern = ?').run(groupId, pluginPattern)
+      this.addGrant({ groupId, pluginPattern: pattern, effect, channel, by })
+    } else {
+      this.db
+        .prepare('UPDATE grants SET effect = ?, channel = ? WHERE group_id = ? AND plugin_pattern = ?')
+        .run(effect === 'deny' ? 'deny' : 'allow', channel, groupId, pluginPattern)
+      this.audit('grant.update', { groupId, pluginPattern, effect, channel }, by)
+    }
+    return { groupId, pattern, effect, channel }
   }
 
   /** Grants belonging to any of the caller's groups, for one plugin name. */
@@ -342,6 +504,25 @@ export class Store {
   bindingForMarket(marketUsername) {
     if (!marketUsername) return null
     return this.bindingRow(this.db.prepare('SELECT * FROM dsh_bindings WHERE market_username = ?').get(marketUsername))
+  }
+
+  /**
+   * Bindings for a page of users, so the accounts list can show each row's DSH account
+   * without pulling the whole binding table.
+   *
+   * Filtering by username is what makes "show bindings inside the user row" affordable:
+   * the alternative was a second unbounded list the console had to hold and join itself.
+   * An empty `usernames` list means "no filter" and returns everything, which keeps the
+   * existing whole-table callers working.
+   */
+  bindingsForMarketUsernames(usernames) {
+    const wanted = Array.isArray(usernames) ? usernames.filter((name) => typeof name === 'string' && name !== '') : []
+    if (wanted.length === 0) return this.listBindings()
+    const marks = wanted.map(() => '?').join(', ')
+    return this.db
+      .prepare(`SELECT * FROM dsh_bindings WHERE market_username IN (${marks}) ORDER BY bound_at DESC`)
+      .all(...wanted)
+      .map((row) => this.bindingRow(row))
   }
 
   listBindings() {
