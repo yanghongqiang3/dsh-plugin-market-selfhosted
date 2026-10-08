@@ -75,6 +75,15 @@
     </div>
 
     <!--
+      What a recall removed from THIS machine.
+
+      Hidden until the service recalls something. Shown prominently rather than tucked away,
+      because a plugin or skill vanishing from a profile with no explanation is a worse failure
+      than the one recall solves — the user would assume they broke something.
+    -->
+    <div class="recallbar hidden" id="recalled"></div>
+
+    <!--
       DSH account binding, offered rather than performed.
 
       It is one-to-one and therefore scarce: binding on sign-in claimed a slot
@@ -374,6 +383,46 @@ async function loadInstalled() {
     }
     for (const item of list) installedMap.set(item.name, item)
   } catch { /* the catalog still renders; install buttons just cannot tell state */ }
+  await loadRecalled()
+}
+
+/**
+ * Show what a recall removed from this machine.
+ *
+ * The service asked for it, so the removal is not the user's doing — saying nothing would leave
+ * them hunting for a plugin that "disappeared". A failure to read the receipt is not worth an
+ * error: the bar simply stays hidden.
+ */
+async function loadRecalled() {
+  const bar = $('recalled')
+  let entries = []
+  try {
+    const result = await local('/dsh-market/recalled')
+    if (Array.isArray(result.body?.entries)) entries = result.body.entries
+  } catch { /* keep the bar hidden */ }
+  bar.textContent = ''
+  bar.classList.toggle('hidden', entries.length === 0)
+  if (entries.length === 0) return
+
+  const title = document.createElement('div')
+  title.className = 'recall-title'
+  title.textContent = `服务端召回，已从本机移除 ${entries.length} 项`
+  bar.appendChild(title)
+
+  const list = document.createElement('div')
+  list.className = 'recall-list'
+  list.textContent = entries
+    .slice(-8)
+    .map((item) => `${item.name}@${item.version}（${item.kind === 'skill' ? '技能' : '插件'}）`)
+    .join('\n')
+  bar.appendChild(list)
+
+  const note = document.createElement('div')
+  note.className = 'recall-note'
+  note.textContent = entries.some((item) => item.kind !== 'skill')
+    ? '其中插件要重启 DSH 才彻底卸载；技能已即时生效。'
+    : '技能已即时生效。'
+  bar.appendChild(note)
 }
 
 /**

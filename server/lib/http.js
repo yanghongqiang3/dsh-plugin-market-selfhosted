@@ -889,6 +889,37 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     { auth: 'none', binary: true },
   )
 
+  /**
+   * Recall: ask every client to REMOVE this version from machines that already have it.
+   *
+   * A separate route from `/state` because it is a separate intent. `state = revoked` stops
+   * distribution and leaves installed copies alone; recall is the security action, and folding
+   * it into `revoked` would make a temporary withdrawal erase everybody's install.
+   */
+  route('POST', '/dsh-market/admin/artifacts/recall', async (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    const body = await readBody(req)
+    const name = String(body?.name ?? '')
+    const version = String(body?.version ?? '')
+    const channel = String(body?.channel ?? 'stable')
+    /**
+     * Explicit rather than a toggle, so a retried request cannot flip the meaning — the same
+     * reason the state route takes a state instead of "advance".
+     */
+    if (typeof body?.recalled !== 'boolean') {
+      json(res, 400, { ok: false, code: 'E_BAD_REQUEST', detail: '需要 recalled: true 或 false' })
+      return
+    }
+    const changed = artifacts.setRecalled(name, version, channel, body.recalled)
+    store.audit('artifact.recall', { name, version, channel, recalled: body.recalled, changed }, who.username)
+    json(res, changed ? 200 : 404, {
+      ok: changed,
+      code: changed ? null : 'E_NOT_FOUND',
+      recalled: body.recalled,
+    })
+  }, { auth: 'none' })
+
   route('POST', '/dsh-market/admin/artifacts/state', async (req, res) => {
     const who = admin(req, res)
     if (!who) return
@@ -920,6 +951,8 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
         version: item.version,
         channel: item.channel,
         status: item.status,
+        // Per version, so a recall picker can show which ones are already recalled.
+        recalled: item.recalled === true,
       })),
     }))
     const needle = String(params.q ?? '').trim().toLowerCase()
@@ -1074,6 +1107,44 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       user: publicUser(store, result.user),
     })
   }, { auth: 'none' })
+
+  /**
+   * "What is the state of the things I already have?"
+   *
+   * The catalog CANNOT answer this: `catalogRows()` deliberately drops anything that is no
+   * longer publishable, so a revoked or recalled artifact is exactly the thing missing from
+   * it. A client that wanted to reconcile its installed inventory had no way to ask.
+   *
+   * Body: `{ items: [{ name, version, channel }] }` — the client's local inventory.
+   * Answer: one entry per item, present or not, with the recall flag and the state.
+   *
+   * Any signed-in user may call it: it reveals only booleans about artifacts they can already
+   * see in the catalog, and refusing would leave clients unable to honour a recall.
+   */
+  route('POST', '/dsh-market/installed-status', async (req, res, caller) => {
+    const body = await readBody(req)
+    const items = Array.isArray(body?.items) ? body.items.slice(0, 500) : []
+    const entries = items.map((item) => {
+      const name = String(item?.name ?? '')
+      const version = String(item?.version ?? '')
+      const channel = String(item?.channel ?? 'stable')
+      const artifact = name === '' ? null : artifacts.get(name, version, channel)
+      return {
+        name,
+        version,
+        channel,
+        /** False when the service has no such artifact at all. */
+        known: artifact !== null && artifact !== undefined,
+        /** The client should REMOVE it. */
+        recalled: artifact?.recalled === true,
+        recalledAt: artifact?.recalledAt ?? null,
+        status: artifact?.status ?? null,
+        // The highest publishable version, for reporting an available upgrade alongside.
+        latest: name === '' ? null : (artifacts.latest(name, channel)?.version ?? null),
+      }
+    })
+    json(res, 200, { ok: true, entries })
+  })
 
   route('POST', '/dsh-market/identity/bind', async (req, res, caller) => {
     const body = await readBody(req)

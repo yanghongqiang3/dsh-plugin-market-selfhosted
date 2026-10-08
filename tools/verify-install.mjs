@@ -1103,6 +1103,70 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
 }
 
 /**
+ * Recall, and the boundary between it and revocation.
+ *
+ * The reported behaviour — "revoked in the console and the installed plugin still runs" — turned
+ * out to be a design gap, not a defect: revocation was implemented faithfully as "stop
+ * distributing" and the client had NO awareness of it at all. Recall is the missing action, and
+ * the properties below are the ones that fail silently if any piece is dropped:
+ *
+ *   - recall must be a SEPARATE axis, or revoking temporarily would erase every install
+ *   - a recalled artifact must not be advertised or offered as an update
+ *   - the client must actually remove it, per VERSION, and leave a receipt
+ *   - the console must say what each action does and does not reach
+ */
+{
+  const artifactsSource4 = fs.readFileSync(path.join(dir, 'server', 'lib', 'artifacts.js'), 'utf8')
+  const policySource = fs.readFileSync(path.join(dir, 'server', 'lib', 'policy.js'), 'utf8')
+  const httpSource4 = fs.readFileSync(path.join(dir, 'server', 'lib', 'http.js'), 'utf8')
+  const pluginSource5 = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+  const consoleSource5 = fs.readFileSync(path.join(dir, 'web', 'console.html'), 'utf8')
+  const marketSource2 = fs.readFileSync(path.join(dir, 'web', 'market.html'), 'utf8')
+
+  artifactsSource4.includes('setRecalled')
+    ? ok('召回是独立于状态的标记（revoked 不会清空所有人的安装）')
+    : fail('  召回被折进 state —— 临时下架会变成清空安装')
+  const refusesRecalled = policySource.includes("code: 'E_RECALLED'")
+  refusesRecalled
+    ? ok('  被召回的制品不再可分发（错误码与 revoked 区分）')
+    : fail('  召回后仍可下载 —— 一边要求移除一边继续分发')
+  // The catalog must not advertise it, while the console still must see it.
+  const catalogSkipsRecalled = /if \(row\.recalled === 1\) continue/.test(artifactsSource4)
+  catalogSkipsRecalled
+    ? ok('  客户端目录不再出现被召回的版本（否则召回比撤回还显眼）')
+    : fail('  被召回的版本仍出现在客户端目录里')
+  const adminIgnoresRecall = /highestAny\(rows\)[\s\S]{0,300}?parseVersion/.test(artifactsSource4)
+  adminIgnoresRecall
+    ? ok('  管理列表仍能看到被召回的版本（否则改不回来）')
+    : fail('  管理列表把召回也过滤掉了')
+
+  // The client half: it has to KNOW, which it never did.
+  pluginSource5.includes('reconcileRecalled')
+    ? ok('客户端启动时对账（此前完全不知道撤回/召回的存在）')
+    : fail('  客户端仍然不知道服务端撤回了什么')
+  const perVersion = /item\.recalled !== true/.test(pluginSource5)
+  perVersion
+    ? ok('  按名字+版本精确匹配（不会因为同名就删掉较新的版本）')
+    : fail('  对账不看版本 —— 召回 1.0.0 会删掉已装的 1.1.0')
+  pluginSource5.includes('MARKET_AUTO_RECALL')
+    ? ok('  有开关可以关掉')
+    : fail('  自动移除没有开关')
+  pluginSource5.includes('RECALLED_FILE') && pluginSource5.includes('appendRecalledRecord')
+    ? ok('  每次移除都留回执（静默删除比它解决的问题更糟）')
+    : fail('  移除没有留下任何记录')
+  marketSource2.includes('/dsh-market/recalled')
+    ? ok('  安装页把回执显示给用户')
+    : fail('  安装页不告诉用户东西被移除了')
+  // A machine that never starts DSH again cannot be recalled — say so where the operator clicks.
+  consoleSource5.includes('拉取式客户端无法被强制')
+    ? ok('  召回弹窗说明了它够不到哪些机器')
+    : fail('  召回被描述成能兜底 —— 离线机器不会被召回')
+  consoleSource5.includes('已安装的人不受影响，也不会被移除')
+    ? ok('  改状态的弹窗说明了 revoked 的边界')
+    : fail('  revoked 仍只提下载，读起来像"已处理"')
+}
+
+/**
  * SKILL support.
  *
  * Skills are not loader entries: they are catalog items the agent reads on demand. So an

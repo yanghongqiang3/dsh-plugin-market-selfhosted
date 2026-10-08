@@ -49,6 +49,14 @@ export function evaluate(store, caller, artifact) {
     return { allowed: false, code: 'E_CHANNEL_NOT_GRANTED', detail: `未授予 ${channel} 通道` }
   }
 
+  /**
+   * Recall implies "do not distribute" — it would be absurd to ask clients to remove something
+   * while still handing it out.
+   *
+   * The DISTINCT code matters: the client tells the user why it is removing something, and
+   * 「被召回」 is a different message from 「已被撤回」.
+   */
+  if (artifact.recalled === true) return { allowed: false, code: 'E_RECALLED' }
   if (artifact.status === 'revoked') return { allowed: false, code: 'E_REVOKED' }
   if (artifact.status !== 'published') {
     return { allowed: false, code: 'E_NOT_PUBLISHED', detail: `状态为 ${artifact.status}` }

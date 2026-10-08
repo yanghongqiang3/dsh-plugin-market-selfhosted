@@ -249,11 +249,26 @@ export class Artifacts {
     return this.highest(rows)
   }
 
-  /** The highest-versioned publishable artifact among raw rows, or undefined. */
+  /**
+   * The highest-versioned artifaact that may still be DISTRIBUTED, or null.
+   *
+   * Two things disqualify a row, and they are separate axes:
+   *
+   *  - `state !== published` — not published.
+   *  - `recalled` — the service has asked clients to remove it, so offering it again (and
+   *    pointing an 「更新到 X」 button at it) would contradict the recall.
+   *
+   * Skipping recalled rows here is what keeps recall from being MORE visible than revocation:
+   * a revoked-only name is absent from the catalog, and a recalled one must be too.
+   * `adminRows()` deliberately does not filter either — the console has to see both to change
+   * them back.
+   */
   highest(rows) {
     let best = null
     for (const row of rows) {
       if (row.state !== PUBLISHABLE) continue
+      // A recalled version must not be advertised or offered as an update.
+      if (row.recalled === 1) continue
       if (parseVersion(row.version) === null) continue
       if (best === null || compareVersions(row.version, best.version) > 0) best = row
     }
@@ -398,6 +413,23 @@ export class Artifacts {
     const bytes = readFileSync(this.selfFile)
     if (sha256(bytes) !== meta.sha256) return null
     return bytes
+  }
+
+  /**
+   * Mark (or unmark) a version as recalled: "remove it from the machines that have it".
+   *
+   * Deliberately NOT a state. `setState('revoked')` stops distribution and leaves installed
+   * copies alone — right for "pull it while I fix it". Recall is the other intent, the security
+   * one, and folding it into `revoked` would make a temporary withdrawal erase everybody's
+   * install.
+   *
+   * Recall implies "do not distribute" too; `policy` enforces that separately.
+   */
+  setRecalled(name, version, channel, recalled) {
+    const result = this.db
+      .prepare('UPDATE artifacts SET recalled = ?, recalled_at = ? WHERE name = ? AND version = ? AND channel = ?')
+      .run(recalled ? 1 : 0, recalled ? Date.now() : null, name, version, channel)
+    return Number(result.changes) > 0
   }
 
   setState(name, version, channel, state) {

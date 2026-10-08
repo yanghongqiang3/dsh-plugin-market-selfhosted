@@ -958,7 +958,7 @@ function renderArtifacts() {
   $('artifacts-count').textContent = `　${total} 个`
   table.appendChild(thead([
     ['制品', 'grow'], ['类型', 'col-kind'], ['版本', 'col-role'], ['通道', 'col-role'],
-    ['状态', 'col-status'], ['大小', 'col-status'], ['', 'col-actions'],
+    ['状态', 'col-status'], ['召回', 'col-status'], ['大小', 'col-status'], ['', 'col-actions'],
   ]))
   if (entries.length === 0) {
     const empty = document.createElement('div')
@@ -998,6 +998,14 @@ function renderArtifacts() {
       [artifact.version, 'col-role'],
       [artifact.channel, 'col-role'],
       [state, 'col-status ' + (state === 'published' ? 'ok' : (state === 'revoked' ? 'bad' : ''))],
+      /**
+       * Recall gets its own column rather than being folded into the state.
+       *
+       * They are different promises: revoked means "nobody can download it any more", recalled
+       * means "the machines that have it will remove it". Collapsing them would hide which one
+       * an operator actually asked for.
+       */
+      [artifact.recalled === true ? '已召回' : '', 'col-status ' + (artifact.recalled === true ? 'bad' : '')],
       [`${artifact.sizeBytes ?? 0} B`, 'col-status'],
     ])
     const actions = document.createElement('div')
@@ -1041,8 +1049,17 @@ function renderArtifacts() {
       })
       openForm({
         title: `${artifact.name}@${artifact.version}`,
+        /**
+         * Say what revoked does AND what it does not.
+         *
+         * The old wording named only the download side — 「即使有人被授予权限也下载不到」 — which
+         * is true and reads as "handled". An operator revoking a plugin they believe is
+         * dangerous reasonably expects it to come off the machines, and it does not: clients
+         * never even learn about revocation. The boundary belongs here, next to the button.
+         */
         hint: artifact.status === 'published'
-          ? '改成 revoked 后，即使有人被授予权限也下载不到。'
+          ? 'revoked = 停止分发：目录里不再出现，有权限也下载不到。\n'
+            + '已安装的人不受影响，也不会被移除 —— 那是「召回」做的事。'
           : '只有 published 状态可以被安装。',
         submitLabel: '保存',
         fields,
@@ -1065,6 +1082,68 @@ function renderArtifacts() {
         },
       })
     }))
+    /**
+     * Recall: a separate button, because it is a separate promise.
+     *
+     * 「改状态 → revoked」 stops distribution and touches nobody's install. Recall asks every
+     * client to REMOVE it — the action an operator wants when the artifact itself is the
+     * problem. One control for both would make a temporary withdrawal look like a recall, and
+     * a recall look like a withdrawal.
+     */
+    // The DANGER styling goes on the button, not the dialog: openForm has no danger option
+    // (that belongs to openConfirm), so passing one there was a dead key.
+    actions.appendChild(miniButton(artifact.recalled === true ? '取消召回' : '召回', () => {
+      const allVersions = Array.isArray(artifact.versions) && artifact.versions.length > 0
+        ? artifact.versions
+        : [{ version: artifact.version, channel: artifact.channel, status: artifact.status, recalled: artifact.recalled }]
+      const fields = []
+      if (allVersions.length > 1) {
+        fields.push({
+          name: 'target',
+          label: `版本（该插件共 ${allVersions.length} 个）`,
+          type: 'select',
+          value: `${artifact.version}@${artifact.channel}`,
+          options: allVersions.map((v) => ({
+            value: `${v.version}@${v.channel}`,
+            label: `${v.version}　${v.channel}　${v.recalled ? '已召回' : v.status}`,
+          })),
+        })
+      }
+      const turningOn = artifact.recalled !== true
+      openForm({
+        title: `${turningOn ? '召回' : '取消召回'} ${artifact.name}`,
+        /**
+         * The reach is the part an operator cannot guess, so it is stated flatly — including
+         * what recall CANNOT do, because a machine that never starts DSH again is beyond any
+         * pull-based client and nobody should believe otherwise after reading this.
+         */
+        hint: turningOn
+          ? '召回 = 要求每台客户端**移除**已安装的副本（可逆）。\n'
+            + '· 技能：几秒内生效\n'
+            + '· 插件：需要重启 DSH（装载器只在启动时读）\n'
+            + '· 同时停止分发：目录里不再出现，也下载不到\n'
+            + '· 离线、或再也不会启动 DSH 的机器不会收到 —— 拉取式客户端无法被强制\n'
+          : '取消召回后重新可分发。已被移除的副本不会自动装回来，需要各自重装。',
+        submitLabel: turningOn ? '召回' : '取消召回',
+        fields,
+        onSubmit: async (values) => {
+          const picked = String(values.target ?? `${artifact.version}@${artifact.channel}`)
+          const at = picked.lastIndexOf('@')
+          const version = picked.slice(0, at)
+          const channel = picked.slice(at + 1)
+          const result = await service('/dsh-market/admin/artifacts/recall', {
+            method: 'POST',
+            body: { name: artifact.name, version, channel, recalled: turningOn },
+          })
+          if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+          status(turningOn
+            ? `${artifact.name}@${version} 已召回。客户端下次启动时会移除它；技能几秒内生效。`
+            : `${artifact.name}@${version} 已取消召回。`)
+          await loadArtifacts()
+          return { ok: true }
+        },
+      })
+    }, artifact.recalled !== true))
     row.appendChild(actions)
     table.appendChild(row)
   }

@@ -109,6 +109,18 @@
   .note-more[open] summary::before{content:'▾ '}
   .note-detail{margin-top:6px;white-space:pre-wrap;overflow-wrap:anywhere;
                border-left:2px solid var(--border1);padding-left:9px}
+  /**
+   * The recall receipt.
+   *
+   * Error-coloured and above the toolbar, because it is the one notice on this page the user did
+   * not cause and cannot undo — something they had is gone.
+   */
+  .recallbar{border:1px solid var(--error);border-radius:8px;padding:8px 12px;margin-bottom:10px;
+             background:var(--layer1);color:var(--label);font-size:12px;line-height:1.6}
+  .recallbar .recall-title{color:var(--error);font-weight:600}
+  .recallbar .recall-list{margin-top:4px;white-space:pre-line;color:var(--label2);
+                          font-family:ui-monospace,Consolas,monospace}
+  .recallbar .recall-note{margin-top:4px;color:var(--label2)}
   .bar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
   input[type=search],input[type=text],input[type=password]{
        border:1px solid var(--border1);background:var(--layer1);color:var(--label);

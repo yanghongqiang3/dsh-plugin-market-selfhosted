@@ -168,6 +168,23 @@ function migrate(db) {
     // 'plugin' is the honest default rather than NULL.
     db.exec("ALTER TABLE artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'plugin'")
   }
+
+  /**
+   * Recall: "remove this from the machines that already have it".
+   *
+   * Separate from `state` on purpose. `state = revoked` means STOP DISTRIBUTING — the catalog
+   * drops it and `/download` refuses — and it deliberately does NOT reach back to installed
+   * copies, which is right for "pull it while I fix it". Recall is the other intent, the
+   * security one, and conflating them would make revoking something temporarily erase
+   * everybody's install.
+   *
+   * `recalled_at` records when, so the console can say since when rather than just "yes".
+   */
+  const recalledColumns = db.prepare('PRAGMA table_info(artifacts)').all()
+  if (!recalledColumns.some((row) => row.name === 'recalled')) {
+    db.exec('ALTER TABLE artifacts ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0')
+    db.exec('ALTER TABLE artifacts ADD COLUMN recalled_at INTEGER')
+  }
 }
 
 /** Rows -> plain objects with the field names the HTTP layer speaks. */
@@ -213,5 +230,14 @@ export function rowToArtifact(row) {
     // `plugin` | `bundle` | `skill` — the console labels and filters on this, and it is how
     // a skill shows up as a skill instead of an indistinguishable package.
     kind: row.kind ?? 'plugin',
+    /**
+     * Recall is a SEPARATE axis from status.
+     *
+     * `status = revoked` stops distribution. `recalled` additionally asks every client to
+     * remove what it already installed — the security case. Keeping them apart is what lets an
+     * operator pull an artifact temporarily without erasing everybody's install.
+     */
+    recalled: row.recalled === 1,
+    recalledAt: row.recalled_at ?? null,
   }
 }

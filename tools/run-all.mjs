@@ -56,6 +56,7 @@ const SUITES = [
   ['技能免 manifest', 'probe-skill-synthesis.mjs', []],
   ['目录筛选分页', 'probe-catalog-paging.mjs', []],
   ['撤回可见性', 'probe-revoked-visibility.mjs', []],
+  ['召回', 'probe-recall.mjs', []],
   // Needs a real browser; it reports SKIPPED rather than pretending to pass.
   ['安装页界面', 'probe-market-ui.mjs', []],
 ]
