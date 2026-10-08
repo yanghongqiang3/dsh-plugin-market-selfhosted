@@ -1220,6 +1220,19 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   marketCssLayout.includes('col-narrow-hide')
     ? ok('  窄屏先隐藏次要列，而不是把操作按钮挤出视野')
     : fail('  窄屏没有让位策略')
+
+  /**
+   * The content area's base size must be ZERO, not its content width.
+   *
+   * `#view-console` wraps so the status line can take its own row. With `flex: 1 1 auto` the base
+   * size is the content width, so a pane with wide content wrapped BELOW the nav — the 账号 pane,
+   * with its search box and table, did exactly that while the other four were fine. Content must
+   * not decide the layout; that is the same defect as the status bar, one pane over.
+   */
+  const panesZeroBasis = /\.panes\s*\{[^}]*flex:\s*1\s+1\s+0\b/.test(consoleCssLayout)
+  panesZeroBasis
+    ? ok('内容区基准宽度为 0（布局不由内容宽度决定）')
+    : fail('  内容区用内容宽度作基准 —— 内容宽的面板会整块掉到导航下面')
 }
 
 /**

@@ -152,6 +152,75 @@ const measure = () => evaluate(`(() => {
 })()`)
 
 console.log('')
+console.log('--- 每个面板的内容都在导航右侧（不能跑到下面）---')
+/**
+ * All five panes, not just the one that was reported.
+ *
+ * `#view-console` wraps so the status line can take its own row, and the content area's base size
+ * used to be its CONTENT width (`flex: 1 1 auto`). So a pane with wide content — 账号, with its
+ * search box and table — wrapped BELOW the nav, while the artifacts pane stayed put because its
+ * table scrolls and contributes no wide max-content. Content must not decide the layout.
+ *
+ * The viewport is set WIDE first. At the default headless size (800px) the `max-width: 820px`
+ * rule switches the console to a stacked column ON PURPOSE, and measuring there reported every
+ * pane as "wrapped" — the assertion was broken, not the page.
+ */
+await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false })
+await sleep(400)
+for (const panel of ['users', 'groups', 'grants', 'publish', 'artifacts']) {
+  await evaluate(`document.querySelector('.navbtn[data-panel="${panel}"]').click()`)
+  await sleep(700)
+  const geometry = await evaluate(`(() => {
+    const nav = document.querySelector('#view-console .side')
+    const panes = document.querySelector('#view-console .panes')
+    const navBox = nav.getBoundingClientRect()
+    const panesBox = panes.getBoundingClientRect()
+    return {
+      navRight: Math.round(navBox.right),
+      navTop: Math.round(navBox.top),
+      panesLeft: Math.round(panesBox.left),
+      panesTop: Math.round(panesBox.top),
+      panesWidth: Math.round(panesBox.width),
+      wraps: panesBox.top >= navBox.bottom - 1,
+    }
+  })()`)
+  ok(`${panel}：内容区在导航右侧`, geometry.wraps === false && geometry.panesLeft >= geometry.navRight,
+    `nav 右缘 ${geometry.navRight} / 内容左缘 ${geometry.panesLeft} 换行=${geometry.wraps}`)
+  ok(`  ${panel}：内容区撑满剩余宽度`, geometry.panesWidth >= 600, `${geometry.panesWidth}px`)
+}
+
+// Back to the pane this probe measures in the sections below.
+await evaluate(`document.querySelector('.navbtn[data-panel="artifacts"]').click()`)
+await sleep(700)
+
+console.log('')
+console.log('--- 窄到 820px 以下时，堆叠是设计好的 ---')
+/**
+ * The other half of the same rule: below 820px the console deliberately stacks, so the nav sits
+ * ABOVE the content. Asserted so the wide-layout assertion above cannot be "fixed" by deleting
+ * the responsive branch.
+ */
+{
+  await send('Emulation.setDeviceMetricsOverride', { width: 780, height: 900, deviceScaleFactor: 1, mobile: false })
+  await sleep(400)
+  const stacked = await evaluate(`(() => {
+    const nav = document.querySelector('#view-console .side')
+    const panes = document.querySelector('#view-console .panes')
+    return {
+      panesTop: Math.round(panes.getBoundingClientRect().top),
+      navBottom: Math.round(nav.getBoundingClientRect().bottom),
+      navWidth: Math.round(nav.getBoundingClientRect().width),
+    }
+  })()`)
+  ok('780px 下导航在上、内容在下（有意为之）', stacked.panesTop >= stacked.navBottom - 1,
+    `nav 底 ${stacked.navBottom} / 内容顶 ${stacked.panesTop}`)
+  ok('  导航此时横向铺开，不再占一整列', stacked.navWidth > 300, `${stacked.navWidth}px`)
+  await send('Emulation.clearDeviceMetricsOverride')
+  await evaluate(`document.querySelector('.navbtn[data-panel="artifacts"]').click()`)
+  await sleep(500)
+}
+
+console.log('')
 console.log('--- 名字列在窄窗口下不能被压扁 ---')
 /**
  * The floor is 160px. Anything at or above it can show a recognisable prefix of the name; the

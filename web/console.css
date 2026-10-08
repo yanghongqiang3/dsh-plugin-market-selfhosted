@@ -36,7 +36,20 @@
 .navbtn { text-align: left; padding: 7px 11px; }
 .navbtn.on { border-color: var(--brand); color: var(--brand); background: var(--layer2); }
 
-.panes { flex: 1 1 auto; min-width: 0; }
+/**
+ * `flex-basis: 0`, NOT `auto`.
+ *
+ * The container wraps now (so the status line can take its own row), and with `auto` the base
+ * size is the CONTENT width — so a pane whose content is wide wrapped the whole content area
+ * below the nav. The 账号 pane did exactly that while the others were fine, and the difference
+ * was content: the artifacts pane's table is `overflow-x:auto` and therefore contributes no wide
+ * max-content, so it stayed put. A layout that depends on how wide the current pane's contents
+ * happen to be is the same defect as the status bar, one pane over.
+ *
+ * With a zero basis the row is nav + whatever is left, whatever is inside it, and only the
+ * 100%-basis status wraps.
+ */
+.panes { flex: 1 1 0; min-width: 0; }
 
 .pane .panel + .panel { margin-top: 14px; }
 .pane .panel-row { display: flex; gap: 14px; align-items: flex-start; }
