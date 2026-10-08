@@ -1,4 +1,6 @@
-node_modules
-.market
+node_modules/
+.market/
 preview/
 .research/
+# Written and deleted by start-market.bat; ignore it in case a run is interrupted.
+.dsh-version-probe.cjs

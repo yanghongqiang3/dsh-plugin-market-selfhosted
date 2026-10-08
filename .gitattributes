@@ -1,0 +1,13 @@
+# Line endings are declared, not inferred from each machine's autocrlf setting.
+#
+# The .bat file MUST be CRLF: cmd.exe mis-parses LF-only batch files. Everything
+# else is LF, so a Linux/CI checkout behaves the same as a Windows one.
+
+* text=auto eol=lf
+
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+*.png  binary
+*.tgz  binary
+*.db   binary

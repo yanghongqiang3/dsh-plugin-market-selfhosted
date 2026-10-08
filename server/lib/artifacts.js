@@ -2,32 +2,27 @@
  * Market server — artifact storage.
  *
  * One artifact is a gzipped tar of the plugin package directory, stored under
- * `<dataDir>/artifacts/<name>/<version>/<channel>.tgz`. The sha256 recorded at
- * publish time is the installer's integrity check on the way back out, so the
- * server cannot silently serve different bytes than it advertised.
+ * `<storageDir>/<name>/<version>/<channel>.tgz`. The sha256 recorded here is the
+ * installer's integrity check on the way back out, so the server cannot silently
+ * serve different bytes than it advertised — and `readVerified` re-hashes before
+ * every download rather than trusting the file on disk.
  *
- * Publishing reads a `market.json` beside the package's package.json:
+ * Two ways in:
+ *   - publishFromDirectory: the bytes are on this machine (server-side CLI)
+ *   - publishArchive:       an already-packed archive arrives over HTTP (upload/CI)
+ *
+ * Publishing metadata comes from `market.json` beside `package.json`:
  *
  *   { "summary": "...", "owner": "billing", "channel": "stable",
  *     "dsh": ">=0.2.0-rc.2 <0.3", "permissions": ["tools"], "state": "published" }
- *
- * Absent fields fall back to the package.json and to `published`.
  */
-import { createHash } from 'node:crypto'
-import {
-  createReadStream,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { gzipSync, gunzipSync } from 'node:zlib'
 import { rowToArtifact } from './db.js'
+import { ArchiveError, collectFiles, inspectArchive, packTarGz, sha256 } from './pack.js'
 
 const NAME_RE = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*$/
+export const ARTIFACT_STATES = ['draft', 'review', 'published', 'revoked']
 
 export class Artifacts {
   constructor(db, storageDir) {
@@ -47,36 +42,59 @@ export class Artifacts {
 
   // ------------------------------------------------------------------ publish
 
-  /**
-   * Tar up a package directory and record it. Idempotent per (name, version,
-   * channel): republishing the same bytes updates metadata, different bytes
-   * replace the stored archive and the hash together.
-   */
+  /** Pack a package directory that lives on this machine, then record it. */
   publishFromDirectory(packageDir, { publishedBy = 'system', state = null, channel = null } = {}) {
     const dir = resolve(packageDir)
     const pkgPath = join(dir, 'package.json')
     if (!existsSync(pkgPath)) throw new Error(`no package.json in ${dir}`)
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
-    if (!pkg.name || !pkg.version) throw new Error('package.json needs name and version')
-    if (!NAME_RE.test(pkg.name)) throw new Error(`invalid package name: ${pkg.name}`)
-
     const marketPath = join(dir, 'market.json')
     const meta = existsSync(marketPath) ? JSON.parse(readFileSync(marketPath, 'utf8')) : {}
+
+    const files = collectFiles(dir)
+    if (files.length === 0) throw new Error(`nothing to publish in ${dir}`)
+    const archive = packTarGz(dir, files)
+
+    return this.record(archive, { pkg, meta, publishedBy, state, channel, fileCount: files.length })
+  }
+
+  /**
+   * Record an archive that arrived from somewhere else. The archive is inspected
+   * BEFORE anything is written, so a malformed or path-escaping upload never
+   * reaches the storage directory.
+   */
+  publishArchive(archive, { publishedBy = 'system', state = null, channel = null } = {}) {
+    const inspection = inspectArchive(archive)
+    if (!inspection.ok) {
+      const error = new Error(inspection.detail ?? inspection.code)
+      error.code = inspection.code
+      throw error
+    }
+    return this.record(archive, {
+      pkg: inspection.pkg,
+      meta: inspection.meta,
+      publishedBy,
+      state,
+      channel,
+      fileCount: inspection.files.length,
+      via: 'upload',
+    })
+  }
+
+  /** Shared tail of both publish paths: validate identity, write bytes, upsert row. */
+  record(archive, { pkg, meta, publishedBy, state, channel, fileCount, via = 'directory' }) {
+    if (!pkg?.name || !pkg?.version) throw new Error('package.json needs name and version')
+    if (!NAME_RE.test(pkg.name)) throw new Error(`invalid package name: ${pkg.name}`)
 
     const name = pkg.name
     const version = pkg.version
     const resolvedChannel = channel ?? meta.channel ?? 'stable'
     const resolvedState = state ?? meta.state ?? 'published'
-    const summary = meta.summary ?? pkg.description ?? ''
-    const owner = meta.owner ?? ''
-    const dshRange = meta.dsh ?? pkg.dsh?.peer ?? ''
-    const permissions = Array.isArray(meta.permissions) ? meta.permissions : []
+    if (!ARTIFACT_STATES.includes(resolvedState)) {
+      throw new Error(`unknown state "${resolvedState}" (expected one of ${ARTIFACT_STATES.join(', ')})`)
+    }
 
-    const files = collect(dir)
-    if (files.length === 0) throw new Error(`nothing to publish in ${dir}`)
-    const archive = tarGz(dir, files)
-    const sha256 = createHash('sha256').update(archive).digest('hex')
-
+    const digest = sha256(archive)
     const target = this.contain(name, version, `${resolvedChannel}.tgz`)
     mkdirSync(join(target, '..'), { recursive: true })
     writeFileSync(target, archive)
@@ -98,11 +116,11 @@ export class Artifacts {
         version,
         resolvedChannel,
         resolvedState,
-        owner,
-        summary,
-        dshRange,
-        JSON.stringify(permissions),
-        sha256,
+        meta.owner ?? pkg.dsh?.market?.owner ?? '',
+        meta.summary ?? pkg.description ?? '',
+        meta.dsh ?? pkg.dsh?.peer ?? '',
+        JSON.stringify(Array.isArray(meta.permissions) ? meta.permissions : []),
+        digest,
         archive.length,
         target,
         Date.now(),
@@ -115,7 +133,15 @@ export class Artifacts {
         Date.now(),
         'artifact.publish',
         publishedBy,
-        JSON.stringify({ name, version, channel: resolvedChannel, state: resolvedState, sha256, files: files.length }),
+        JSON.stringify({
+          name,
+          version,
+          channel: resolvedChannel,
+          state: resolvedState,
+          sha256: digest,
+          files: fileCount,
+          via,
+        }),
       )
 
     return this.get(name, version, resolvedChannel)
@@ -131,14 +157,11 @@ export class Artifacts {
     )
   }
 
-  /** Newest published version of a name (channel-aware), else newest of any state. */
+  /** Newest version of a name, optionally pinned to a channel. */
   latest(name, channel = null) {
     const row = channel
       ? this.db
-          .prepare(
-            `SELECT * FROM artifacts WHERE name = ? AND channel = ?
-             ORDER BY published_at DESC LIMIT 1`,
-          )
+          .prepare('SELECT * FROM artifacts WHERE name = ? AND channel = ? ORDER BY published_at DESC LIMIT 1')
           .get(name, channel)
       : this.db
           .prepare('SELECT * FROM artifacts WHERE name = ? ORDER BY published_at DESC LIMIT 1')
@@ -167,6 +190,7 @@ export class Artifacts {
   }
 
   setState(name, version, channel, state) {
+    if (!ARTIFACT_STATES.includes(state)) return false
     const result = this.db
       .prepare('UPDATE artifacts SET state = ? WHERE name = ? AND version = ? AND channel = ?')
       .run(state, name, version, channel)
@@ -178,18 +202,19 @@ export class Artifacts {
     const path = this.contain(artifact.name, artifact.version, `${artifact.channel}.tgz`)
     if (!existsSync(path)) return { ok: false, code: 'E_ARCHIVE_MISSING', path }
     const bytes = readFileSync(path)
-    const actual = createHash('sha256').update(bytes).digest('hex')
+    const actual = sha256(bytes)
     if (actual !== artifact.sha256) {
       this.db
         .prepare('INSERT INTO audit (at, action, username, detail) VALUES (?, ?, ?, ?)')
-        .run(Date.now(), 'artifact.corrupt', null, JSON.stringify({ name: artifact.name, version: artifact.version, expected: artifact.sha256, actual }))
+        .run(
+          Date.now(),
+          'artifact.corrupt',
+          null,
+          JSON.stringify({ name: artifact.name, version: artifact.version, expected: artifact.sha256, actual }),
+        )
       return { ok: false, code: 'E_HASH_MISMATCH', path, actual }
     }
     return { ok: true, bytes, path }
-  }
-
-  streamOf(artifact) {
-    return createReadStream(this.contain(artifact.name, artifact.version, `${artifact.channel}.tgz`))
   }
 
   sizeOf(artifact) {
@@ -201,69 +226,4 @@ export class Artifacts {
   }
 }
 
-// ------------------------------------------------------------------ tar writer
-
-/** Deterministic tar: fixed mtime and sorted entries, so the same tree hashes alike. */
-function tarGz(root, files) {
-  const blocks = []
-  for (const relative of [...files].sort()) {
-    const absolute = join(root, relative)
-    const data = readFileSync(absolute)
-    blocks.push(tarHeader(relative, data.length), data, padding(data.length))
-  }
-  blocks.push(Buffer.alloc(1024)) // two zero blocks terminate the archive
-  return gzipSync(Buffer.concat(blocks), { level: 9 })
-}
-
-function collect(root, prefix = '', out = []) {
-  for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
-    const relative = prefix ? `${prefix}/${entry.name}` : entry.name
-    if (entry.name === 'node_modules' || entry.name === '.git') continue
-    if (entry.isDirectory()) collect(root, relative, out)
-    else if (entry.isFile()) out.push(relative)
-  }
-  return out
-}
-
-function tarHeader(name, size) {
-  const header = Buffer.alloc(512)
-  const write = (offset, length, value) => header.write(value, offset, length, 'utf8')
-  const nameBytes = Buffer.byteLength(name)
-  if (nameBytes > 100) throw new Error(`path too long for tar: ${name}`)
-  write(0, 100, name)
-  write(100, 8, '0000644\0') // mode
-  write(108, 8, '0000000\0') // uid
-  write(116, 8, '0000000\0') // gid
-  write(124, 12, `${size.toString(8).padStart(11, '0')}\0`)
-  write(136, 12, '00000000000\0') // mtime fixed at 0 for determinism
-  write(148, 8, '        ') // checksum placeholder
-  header.write('0', 156, 1, 'utf8') // regular file
-  header.write('ustar\0', 257, 6, 'utf8')
-  header.write('00', 263, 2, 'utf8')
-  let sum = 0
-  for (const byte of header) sum += byte
-  write(148, 8, `${sum.toString(8).padStart(6, '0')}\0 `)
-  return header
-}
-
-function padding(size) {
-  const remainder = size % 512
-  return remainder === 0 ? Buffer.alloc(0) : Buffer.alloc(512 - remainder)
-}
-
-/** Used by tests to prove an archive round-trips. */
-export function extractTarGz(buffer) {
-  const tar = gunzipSync(buffer)
-  const files = new Map()
-  let offset = 0
-  while (offset + 512 <= tar.length) {
-    const header = tar.subarray(offset, offset + 512)
-    if (header.every((byte) => byte === 0)) break
-    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '')
-    const size = parseInt(header.subarray(124, 136).toString('utf8').replace(/\0.*$/, '').trim(), 8)
-    const start = offset + 512
-    files.set(name, tar.subarray(start, start + size))
-    offset = start + size + ((512 - (size % 512)) % 512)
-  }
-  return files
-}
+export { ArchiveError, extractTarGz } from './pack.js'

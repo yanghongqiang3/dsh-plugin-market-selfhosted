@@ -8,14 +8,24 @@
  */
 import { createServer } from 'node:http'
 import { evaluate, statusFor } from './policy.js'
+import { ArchiveError, inspectArchive, sha256 } from './pack.js'
 
-const MAX_BODY_BYTES = 64 * 1024
+const MAX_JSON_BYTES = 64 * 1024
+/** Artifact uploads are binary and legitimately large; JSON stays tightly capped. */
+const DEFAULT_MAX_UPLOAD_BYTES = Number(process.env.MARKET_MAX_UPLOAD_BYTES ?? 64 * 1024 * 1024)
 
-export function createMarketServer({ store, artifacts }) {
+export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_MAX_UPLOAD_BYTES }) {
   const routes = []
 
   const route = (method, path, handler, options = {}) => {
-    routes.push({ method, path, handler, auth: options.auth ?? 'user' })
+    routes.push({
+      method,
+      path,
+      handler,
+      auth: options.auth ?? 'user',
+      binary: options.binary === true,
+      maxBytes: options.maxBytes ?? (options.binary === true ? maxUploadBytes : MAX_JSON_BYTES),
+    })
   }
 
   // ------------------------------------------------------------------ helpers
@@ -30,30 +40,36 @@ export function createMarketServer({ store, artifacts }) {
     res.end(text)
   }
 
-  const readBody = (req) =>
+  /** Collect the request body as raw bytes, refusing anything over `limit`. */
+  const readRawBody = (req, limit) =>
     new Promise((resolve, reject) => {
       let size = 0
       const chunks = []
       req.on('data', (chunk) => {
         size += chunk.length
-        if (size > MAX_BODY_BYTES) {
-          reject(new Error('E_BODY_TOO_LARGE'))
+        if (size > limit) {
+          const error = new Error('E_BODY_TOO_LARGE')
+          error.limit = limit
+          reject(error)
           req.destroy()
           return
         }
         chunks.push(chunk)
       })
-      req.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8')
-        if (text === '') return resolve({})
-        try {
-          resolve(JSON.parse(text))
-        } catch {
-          reject(new Error('E_BAD_JSON'))
-        }
-      })
+      req.on('end', () => resolve(Buffer.concat(chunks)))
       req.on('error', reject)
     })
+
+  const readBody = async (req, limit = MAX_JSON_BYTES) => {
+    const raw = await readRawBody(req, limit)
+    const text = raw.toString('utf8')
+    if (text === '') return {}
+    try {
+      return JSON.parse(text)
+    } catch {
+      throw new Error('E_BAD_JSON')
+    }
+  }
 
   const tokenOf = (req) => {
     const header = req.headers.authorization
@@ -473,18 +489,116 @@ export function createMarketServer({ store, artifacts }) {
 
   // ------------------------------------------------------------------ publish
 
+  /**
+   * Upload a packed artifact.
+   *
+   * Default is a DRY RUN: the archive is inspected and its metadata reported, but
+   * nothing is written. `?commit=1` performs the publish. This lets a CI job or a
+   * person validate a build without touching the live catalog.
+   *
+   * The archive is inspected before it reaches storage, so a malformed or
+   * path-escaping upload is refused with a reason instead of half-written.
+   */
+  route(
+    'POST',
+    '/dsh-market/publish',
+    async (req, res, _caller, url) => {
+      const who = admin(req, res)
+      if (!who) return
+
+      const archive = await readRawBody(req, maxUploadBytes)
+      if (archive.length === 0) {
+        json(res, 400, { ok: false, code: 'E_EMPTY_BODY', detail: '请求体为空，需要上传 .tar.gz' })
+        return
+      }
+
+      const commit = url.searchParams.get('commit') === '1'
+      const state = url.searchParams.get('state') ?? undefined
+      const channel = url.searchParams.get('channel') ?? undefined
+
+      // Always inspect first — this is what makes dry run and commit share a path.
+      let inspection
+      try {
+        inspection = inspectArchive(archive)
+      } catch (error) {
+        store.audit('artifact.reject', { reason: String(error?.message ?? error), by: who.username }, who.username)
+        json(res, 400, {
+          ok: false,
+          code: error instanceof ArchiveError ? 'E_BAD_ARCHIVE' : 'E_INSPECT_FAILED',
+          detail: String(error?.message ?? error),
+        })
+        return
+      }
+      if (!inspection.ok) {
+        store.audit('artifact.reject', { code: inspection.code, by: who.username }, who.username)
+        json(res, 400, { ok: false, code: inspection.code, detail: inspection.detail })
+        return
+      }
+
+      const preview = {
+        name: inspection.pkg.name,
+        version: inspection.pkg.version,
+        channel: channel ?? inspection.meta.channel ?? 'stable',
+        state: state ?? inspection.meta.state ?? 'published',
+        owner: inspection.meta.owner ?? inspection.pkg.dsh?.market?.owner ?? '',
+        summary: inspection.meta.summary ?? inspection.pkg.description ?? '',
+        files: inspection.files.length,
+        sizeBytes: archive.length,
+        sha256: sha256(archive),
+      }
+
+      if (!commit) {
+        json(res, 200, { ok: true, dryRun: true, wouldPublish: preview })
+        return
+      }
+
+      try {
+        const artifact = artifacts.publishArchive(archive, {
+          publishedBy: who.username,
+          state,
+          channel,
+        })
+        json(res, 200, { ok: true, dryRun: false, artifact })
+      } catch (error) {
+        json(res, 400, {
+          ok: false,
+          code: error?.code ?? 'E_PUBLISH_FAILED',
+          detail: String(error?.message ?? error),
+        })
+      }
+    },
+    { auth: 'none', binary: true },
+  )
+
   route('POST', '/dsh-market/admin/artifacts/state', async (req, res) => {
     const who = admin(req, res)
     if (!who) return
     const body = await readBody(req)
-    const changed = artifacts.setState(
-      String(body?.name ?? ''),
-      String(body?.version ?? ''),
-      String(body?.channel ?? 'stable'),
-      String(body?.state ?? ''),
-    )
-    json(res, changed ? 200 : 404, { ok: changed, code: changed ? null : 'E_NOT_FOUND' })
+    const name = String(body?.name ?? '')
+    const version = String(body?.version ?? '')
+    const channel = String(body?.channel ?? 'stable')
+    const state = String(body?.state ?? '')
+    const changed = artifacts.setState(name, version, channel, state)
+    store.audit('artifact.state', { name, version, channel, state, changed }, who.username)
+    json(res, changed ? 200 : 404, { ok: changed, code: changed ? null : 'E_NOT_FOUND', state })
   }, { auth: 'none' })
+
+  route('GET', '/dsh-market/admin/artifacts', (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    json(res, 200, {
+      ok: true,
+      artifacts: artifacts.catalogRows().map((artifact) => ({
+        ...artifact,
+        versions: artifacts.listVersions(artifact.name).map((item) => ({
+          version: item.version,
+          channel: item.channel,
+          status: item.status,
+        })),
+      })),
+    })
+  }, { auth: 'none' })
+
 
   route('GET', '/dsh-market/health', (req, res) => {
     json(res, 200, {
@@ -539,8 +653,16 @@ export function createMarketServer({ store, artifacts }) {
       await match.handler(req, res, null, url)
     } catch (error) {
       const code = String(error?.message ?? error)
-      if (code === 'E_BAD_JSON' || code === 'E_BODY_TOO_LARGE') {
-        uri(res, code)
+      if (code === 'E_BODY_TOO_LARGE') {
+        json(res, 413, {
+          ok: false,
+          code,
+          detail: `请求体过大（上限 ${Math.round(match.maxBytes / 1024 / 1024)} MB）`,
+        })
+        return
+      }
+      if (code === 'E_BAD_JSON') {
+        json(res, 400, { ok: false, code, detail: '请求体不是有效 JSON' })
         return
       }
       store.audit('error', { path: url.pathname, message: String(error?.stack ?? error) })

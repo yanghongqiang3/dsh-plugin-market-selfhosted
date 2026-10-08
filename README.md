@@ -16,39 +16,85 @@ DSH 内部插件市场，由**两部分**组成：
 ## 0. 市场服务端
 
 零运行时依赖：HTTP 用 `node:http`，数据库用 Node 内置的 `node:sqlite`。
+**要求 Node ≥ 22.5。**
+
+### 0.1 一键启动（Windows）
 
 ```powershell
-$node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+.\start-market.bat
+```
 
-# 1) 初始化（创建初始管理员 admin / dsh-admin，仅打印一次）
-& $node server\cli.mjs bootstrap
+默认监听 `127.0.0.1:8787`，**数据放项目内的 `.market\`**（数据库 + 制品）。
+该目录已在 `.gitignore` 里，不会进版本库，也不会跟着发布包走。
+首次运行自动建库并打印初始管理员 `admin` / `dsh-admin`。
 
-# 2) 建组、建号、授权
-& $node server\cli.mjs group:add  --id billing --description "计费组"
-& $node server\cli.mjs user:add   --username alice --password <初始密码> --groups billing
-& $node server\cli.mjs grant:add  --group billing --pattern "@dsh-internal/*"
-& $node server\cli.mjs grant:add  --group billing --pattern "@dsh-internal/dsh-plugin-secret" --deny
+| 参数 | 作用 |
+|---|---|
+| `--port 9000` | 换端口 |
+| `--host 0.0.0.0` | 允许内网其他机器访问（同时设置 `MARKET_CALLBACK_HOST`） |
+| `--data D:\data` | 换数据目录 |
+| `--check` | 只做环境检查后退出，不启动服务 |
 
-# 3) 发布插件：把一个插件包目录打成确定性 tar.gz 并登记 sha256
-& $node server\cli.mjs publish --dir <插件包目录>
+脚本先找系统 PATH 里的 `node`，版本不够再回退到 DSH 自带运行时，并在启动前校验
+Node 版本与当前目录，避免"启动了但其实跑不起来"。
 
-# 4) 查看
-& $node server\cli.mjs catalog
-& $node server\cli.mjs user:list
-& $node server\cli.mjs audit --limit 50
-& $node server\cli.mjs prune
+### 0.2 手动启动（Linux / macOS / 服务器）
 
-# 5) 启动
-$env:MARKET_PORT = '8787'
-& $node server\index.mjs
+```bash
+node server/cli.mjs bootstrap        # 只跑一次
+MARKET_PORT=8787 node server/index.mjs
 ```
 
 环境变量：`MARKET_HOST`（默认 `127.0.0.1`）、`MARKET_PORT`（8787）、`MARKET_DATA_DIR`（`.market`）、
-`MARKET_DB`、`MARKET_STORAGE`、`MARKET_CALLBACK_HOST`（生成给用户点开的地址时使用）。
+`MARKET_DB`、`MARKET_STORAGE`、`MARKET_CALLBACK_HOST`、`MARKET_MAX_UPLOAD_BYTES`（默认 64 MB）。
 
-### 0.1 发布插件要准备什么
+### 0.3 发布插件：不需要服务器 shell 权限
 
-在插件包目录里放一个 `market.json`（可选，缺省从 `package.json` 推断）：
+**方式一：上传（推荐，CI 也能用）**
+
+```bash
+# 1) 用你的市场账号登录；令牌存到 ~/.dsh/market-token.json（权限 0600）
+node server/cli.mjs login --username alice --service http://10.0.0.5:8787
+
+# 2) 先预检：服务端只解析、不写入，告诉你它将会发布什么
+node server/cli.mjs publish --dir ./my-plugin --dry-run
+
+# 3) 确认无误后正式发布
+node server/cli.mjs publish --dir ./my-plugin
+node server/cli.mjs publish --dir ./my-plugin --state draft    # 先发草稿
+node server/cli.mjs whoami                                     # 看当前身份
+node server/cli.mjs logout                                     # 清除本地令牌
+```
+
+发布走 `POST /dsh-market/publish`，默认 **dry run**，加 `?commit=1` 才写入。
+归档在写盘**之前**就被检查：非法 gzip、缺 `package.json`、非法 JSON、路径逃逸（`../`）、
+绝对路径、符号链接条目、未知状态——全部拒绝并记审计。上传上限见 `MARKET_MAX_UPLOAD_BYTES`。
+
+**方式二：直接写本机数据库**（需要能访问服务器的文件系统）
+
+```bash
+node server/cli.mjs publish --dir ./my-plugin
+```
+
+没给 `--service` 且本地没有令牌时走这条路。
+
+### 0.4 本机运维命令
+
+```powershell
+& $node server\cli.mjs bootstrap
+& $node server\cli.mjs group:add  --id billing --description "计费组"
+& $node server\cli.mjs user:add   --username alice --password <初始密码> --groups billing [--admin]
+& $node server\cli.mjs grant:add  --group billing --pattern "@dsh-internal/*" [--deny]
+& $node server\cli.mjs grant:rm   --group billing --pattern "@dsh-internal/*"
+& $node server\cli.mjs member:add --user alice --group billing
+& $node server\cli.mjs user:list | catalog | audit [--limit 50] | prune
+& $node server\cli.mjs user:pass   --username alice --password <新密码> --no-must-change
+& $node server\cli.mjs user:status --username alice --status disabled
+```
+
+### 0.5 插件包要准备什么
+
+`package.json` 必需（要有 `name` 与 `version`）。可选一个 `market.json`：
 
 ```json
 { "summary": "计费插件", "owner": "billing", "channel": "stable",
@@ -56,8 +102,9 @@ $env:MARKET_PORT = '8787'
 ```
 
 `state` 可以是 `draft` / `review` / `published` / `revoked`；**只有 `published` 可被安装**。
+缺省字段从 `package.json` 推断。
 
-### 0.2 接口
+### 0.6 接口
 
 ```
 GET  /dsh-market/health                     无需认证
@@ -70,26 +117,28 @@ GET  /dsh-market/catalog                    按调用者授权过滤，每条带
 GET  /dsh-market/detail
 GET  /dsh-market/download                   校验 SHA256 后才下发，响应头带 x-artifact-sha256
 POST /dsh-market/authorize                  只做判定，不传字节
-GET  /dsh-market/admin/users|groups
+POST /dsh-market/publish                    上传归档；默认 dry run，?commit=1 写入（仅 admin）
+GET  /dsh-market/admin/users|groups|artifacts
 POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artifacts/state
 ```
 
-### 0.3 三条不可动摇的规则
+### 0.7 三条不可动摇的规则
 
 1. **默认拒绝** —— 没有任何规则授予就不能装（连管理员也一样，`E_NO_GROUP`）。
 2. **deny 优先** —— 命中任一 deny 规则即拒绝，无论有多少 allow。
 3. **变更即时生效** —— 停用账号会当场吊销其全部会话，旧令牌下一个请求就是 401。
 
-### 0.4 制品的可信链条
+### 0.8 制品的可信链条
 
 发布时算 sha256 存库；下载时**服务端先把磁盘上的字节重新哈希一遍**，不一致就拒绝下发
 （`E_HASH_MISMATCH` + 审计 `artifact.corrupt`），而不是把可疑字节发出去让客户端发现。
 归档是**确定性打包**（mtime 固定为 0、条目排序），同样的目录树永远得到同样的哈希。
 
-### 0.5 服务端测试
+### 0.9 服务端测试
 
 ```powershell
-& $node tools\test-server.mjs        # 57 项：引导/登录/权限/发布/下载/哈希/设备码/审计
+& $node tools\test-server.mjs     # 57 项：引导/登录/权限/发布/下载/哈希/设备码/审计
+& $node tools\test-publish.mjs    # 35 项：CLI 登录/预检/上传/畸形归档/状态流转
 ```
 
 ---

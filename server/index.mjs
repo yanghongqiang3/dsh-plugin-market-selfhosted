@@ -3,8 +3,10 @@
  *
  *   node server/index.mjs                 # listen on 127.0.0.1:8787
  *   MARKET_PORT=9000 node server/index.mjs
- *   MARKET_DB=/var/lib/market/market.db MARKET_STORAGE=/var/lib/market/artifacts node server/index.mjs
+ *   MARKET_DATA_DIR=/var/lib/market node server/index.mjs
  *
+ * Data defaults to <repo>/.market, resolved from this file's location, so the
+ * server reads the same database no matter which directory it was started from.
  * First run creates a bootstrap administrator and prints its initial password
  * once; the account is flagged must-change-password.
  */
@@ -14,13 +16,11 @@ import { openDatabase } from './lib/db.js'
 import { Store, DEFAULT_ADMIN } from './lib/store.js'
 import { Artifacts } from './lib/artifacts.js'
 import { createMarketServer } from './lib/http.js'
+import { DB_FILE, STORAGE_DIR } from './lib/paths.js'
 
 const HOST = process.env.MARKET_HOST ?? '127.0.0.1'
 const PORT = Number(process.env.MARKET_PORT ?? 8787)
 const CALLBACK_HOST = process.env.MARKET_CALLBACK_HOST ?? '127.0.0.1'
-const DATA_DIR = resolve(process.env.MARKET_DATA_DIR ?? '.market')
-const DB_FILE = resolve(process.env.MARKET_DB ?? join(DATA_DIR, 'market.db'))
-const STORAGE_DIR = resolve(process.env.MARKET_STORAGE ?? join(DATA_DIR, 'artifacts'))
 
 export function bootstrap({ dbFile = DB_FILE, storageDir = STORAGE_DIR } = {}) {
   const db = openDatabase(dbFile)

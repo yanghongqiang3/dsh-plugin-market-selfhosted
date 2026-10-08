@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Market server — operator CLI.
+ * Market server — operator CLI, and the publishing client.
  *
+ * ── 服务端本机运维（直接读写数据库，需要能访问服务器文件系统）──────────────
  *   node server/cli.mjs bootstrap
  *   node server/cli.mjs user:add   --username alice --password secret --groups platform [--admin]
  *   node server/cli.mjs user:list
@@ -11,23 +12,33 @@
  *   node server/cli.mjs grant:add  --group billing --pattern "@dsh-internal/dsh-plugin-*" [--deny]
  *   node server/cli.mjs grant:rm   --group billing --pattern "@dsh-internal/dsh-plugin-*"
  *   node server/cli.mjs member:add --user alice --group billing
- *   node server/cli.mjs publish    --dir <plugin-package-dir> [--state published] [--channel stable]
- *   node server/cli.mjs catalog
- *   node server/cli.mjs audit      [--limit 50]
- *   node server/cli.mjs prune
+ *   node server/cli.mjs catalog | audit [--limit 50] | prune
  *
- * Reads the same environment as server/index.mjs, so it always edits the same
- * database the service uses.
+ * ── 发布插件（不需要服务器 shell 权限，CI 也能用）────────────────────────────
+ *   node server/cli.mjs login    --username alice [--service http://host:8787]
+ *   node server/cli.mjs whoami   [--service http://host:8787]
+ *   node server/cli.mjs logout
+ *   node server/cli.mjs passwd   （首登强制改密时用）
+ *   node server/cli.mjs publish  --dir <插件包目录> [--service URL] [--dry-run]
+ *                                [--state draft|review|published|revoked] [--channel stable]
+ *
+ * 给了 --service 或本地已有令牌时，publish 走 HTTP 上传；否则直接写本机数据库。
  */
 import { existsSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { openDatabase } from './lib/db.js'
 import { Store, DEFAULT_ADMIN } from './lib/store.js'
 import { Artifacts } from './lib/artifacts.js'
-
-const DATA_DIR = resolve(process.env.MARKET_DATA_DIR ?? '.market')
-const DB_FILE = resolve(process.env.MARKET_DB ?? join(DATA_DIR, 'market.db'))
-const STORAGE_DIR = resolve(process.env.MARKET_STORAGE ?? join(DATA_DIR, 'artifacts'))
+import { DB_FILE, STORAGE_DIR, describePaths } from './lib/paths.js'
+import {
+  forgetToken,
+  postJson,
+  publishDirectory,
+  readStoredToken,
+  serviceOf,
+  storeToken,
+  TOKEN_FILE,
+} from './lib/publisher.js'
 
 function flags(argv) {
   const out = { _: [] }
@@ -61,6 +72,59 @@ function open() {
 const dim = (text) => `\u001b[2m${text}\u001b[0m`
 const bold = (text) => `\u001b[1m${text}\u001b[0m`
 
+/**
+ * Read a password without echoing it, and without it appearing in argv — argv is
+ * visible to every process on the machine, so `--password` is only for automation.
+ */
+async function readPassword(prompt = '密码：') {
+  const stdin = process.stdin
+  if (!stdin.isTTY) {
+    console.error('需要密码，但当前不是交互终端。请改用 --password 参数。')
+    process.exit(1)
+  }
+  process.stdout.write(prompt)
+
+  return new Promise((resolve) => {
+    let buffer = ''
+    const wasRaw = stdin.isRaw
+    stdin.setRawMode(true)
+    stdin.resume()
+
+    const finish = () => {
+      stdin.setRawMode(wasRaw ?? false)
+      stdin.pause()
+      stdin.removeListener('data', onData)
+      process.stdout.write('\n')
+      resolve(buffer)
+    }
+
+    const onData = (chunk) => {
+      const text = chunk.toString('utf8')
+      for (const char of text) {
+        if (char === '\r' || char === '\n' || char === '\u0004') return finish()
+        if (char === '\u0003') {
+          // Ctrl+C: leave the terminal usable before exiting.
+          stdin.setRawMode(wasRaw ?? false)
+          process.stdout.write('\n')
+          process.exit(130)
+        }
+        if (char === '\u007f' || char === '\b') {
+          if (buffer.length > 0) {
+            buffer = buffer.slice(0, -1)
+            process.stdout.write('\b \b')
+          }
+          continue
+        }
+        if (char < ' ') continue // ignore other control characters
+        buffer += char
+        process.stdout.write('*')
+      }
+    }
+
+    stdin.on('data', onData)
+  })
+}
+
 function printGroups(store) {
   const groups = store.listGroups()
   if (groups.length === 0) {
@@ -81,7 +145,16 @@ const command = process.argv[2]
 const args = flags(process.argv.slice(3))
 
 if (!command) {
-  console.log(readFileSync(new URL('./cli.mjs', import.meta.url), 'utf8').split('\n').slice(1, 22).join('\n').replace(/^ \* ?/gm, ''))
+  // Print the header comment as the help text, stopping at the closing marker.
+  const header = readFileSync(new URL('./cli.mjs', import.meta.url), 'utf8').split('\n')
+  const start = header.findIndex((line) => line.startsWith('/**'))
+  const end = header.findIndex((line, index) => index > start && line.trim() === '*/')
+  console.log(
+    header
+      .slice(start + 1, end)
+      .map((line) => line.replace(/^\s*\* ?/, ''))
+      .join('\n'),
+  )
   process.exit(0)
 }
 
@@ -105,8 +178,7 @@ switch (command) {
       store.createGroup({ id: 'platform', name: 'platform', description: '平台组', by: 'system' })
       console.log(`已创建初始管理员：${bold(DEFAULT_ADMIN.username)} / ${DEFAULT_ADMIN.password}（首登强制改密）`)
     }
-    console.log(`数据库：${DB_FILE}`)
-    console.log(`制品目录：${STORAGE_DIR}`)
+    for (const line of describePaths()) console.log(`  ${line}`)
     db.close()
     break
   }
@@ -207,17 +279,150 @@ switch (command) {
   }
 
   case 'publish': {
+    const target = args.dir ?? args._[0]
+    if (!target) {
+      console.error('需要 --dir <插件包目录>')
+      process.exit(1)
+    }
+    const dir = resolve(target)
+
+    // Two publish paths:
+    //   remote — pack here, upload over HTTP. No shell on the server, works in CI.
+    //   local  — the database and storage are on this machine (operator).
+    // `--service` forces remote; otherwise an existing token means remote.
+    const service = serviceOf(args.service)
+    const token = args.token ?? readStoredToken()
+    if (args.service || token) {
+      if (!token) {
+        console.error(`需要令牌。先登录：node server\\cli.mjs login --username <你的账号> --service ${service}`)
+        process.exit(1)
+      }
+      const dryRun = args['dry-run'] === true
+      try {
+        const result = await publishDirectory({
+          dir,
+          service,
+          token,
+          state: typeof args.state === 'string' ? args.state : undefined,
+          channel: typeof args.channel === 'string' ? args.channel : undefined,
+          dryRun,
+          onProgress: (info) => {
+            console.log(`${dryRun ? dim('（预检，不写入）') : ''} ${bold(`${info.name}@${info.version}`)}`)
+            console.log(`  ${info.files} 个文件　${info.bytes} 字节`)
+            console.log(`  sha256    ${info.sha256}`)
+          },
+        })
+        console.log('')
+        if (result.dryRun) {
+          const preview = result.wouldPublish
+          console.log('预检通过，服务端未写入。确认无误后去掉 --dry-run 再跑一次。')
+          console.log(`  通道 ${preview.channel}　状态 ${preview.state}　归属 ${preview.owner || '无'}`)
+        } else {
+          const artifact = result.artifact
+          console.log(`已发布到 ${service}`)
+          console.log(`  ${bold(`${artifact.name}@${artifact.version}`)}（${artifact.channel}，状态 ${artifact.status}）`)
+          console.log(`  sha256    ${artifact.sha256}`)
+          if (artifact.sha256 !== result.localSha256) {
+            console.error('  ⚠ 服务端记录的哈希与本地不一致，请立即核查')
+            process.exit(1)
+          }
+        }
+      } catch (error) {
+        console.error(`发布失败：${error?.code ? error.code + ' ' : ''}${error?.message ?? error}`)
+        process.exit(1)
+      }
+      break
+    }
+
     const { db, artifacts } = open()
-    const artifact = artifacts.publishFromDirectory(resolve(args.dir), {
+    const artifact = artifacts.publishFromDirectory(dir, {
       publishedBy: args.by ?? 'cli',
-      state: args.state,
-      channel: args.channel,
+      state: typeof args.state === 'string' ? args.state : undefined,
+      channel: typeof args.channel === 'string' ? args.channel : undefined,
     })
     console.log(`已发布 ${bold(`${artifact.name}@${artifact.version}`)}（${artifact.channel}，状态 ${artifact.status}）`)
     console.log(`  sha256    ${artifact.sha256}`)
     console.log(`  大小      ${artifact.sizeBytes} 字节`)
     console.log(`  摘要      ${artifact.summary || '（无）'}`)
     db.close()
+    break
+  }
+
+  case 'login': {
+    const service = serviceOf(args.service)
+    if (!args.username) {
+      console.error('需要 --username <账号>')
+      process.exit(1)
+    }
+    const password = args.password ?? (await readPassword(`密码（${args.username}）：`))
+    const result = await postJson(`${service}/dsh-market/auth/login`, {
+      username: args.username,
+      password,
+    })
+    if (!result.ok) {
+      console.error(`登录失败：${result.body?.code ?? `HTTP ${result.status}`} ${result.body?.detail ?? ''}`)
+      process.exit(1)
+    }
+    const file = storeToken(service, result.body.token, result.body.user?.username ?? args.username)
+    console.log(`已登录 ${bold(result.body.user?.username ?? args.username)}（${service}）`)
+    console.log(`  角色      ${result.body.role}`)
+    console.log(`  权限组    ${(result.body.user?.groups ?? []).join('、') || '无'}`)
+    console.log(`  令牌保存  ${file}`)
+    if (result.body.mustChangePassword) {
+      console.log('')
+      console.log('  ⚠ 这个账号还没改初始密码，服务端会拒绝除改密外的所有请求。')
+      console.log(`    先改密：node server\\cli.mjs passwd --service ${service}`)
+    }
+    break
+  }
+
+  case 'whoami': {
+    const service = serviceOf(args.service)
+    const token = args.token ?? readStoredToken()
+    if (!token) {
+      console.log(`未登录（${service}）。跑：node server\\cli.mjs login --username <账号>`)
+      break
+    }
+    const response = await fetch(`${service}/dsh-market/auth/me`, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok) {
+      console.log(`令牌不可用：${body?.code ?? `HTTP ${response.status}`}`)
+      break
+    }
+    console.log(`${bold(body.user.username)}（${service}）`)
+    console.log(`  显示名    ${body.user.displayName}`)
+    console.log(`  角色      ${body.role}`)
+    console.log(`  权限组    ${(body.groups ?? []).join('、') || '无'}`)
+    if (body.mustChangePassword) console.log(`  ${dim('待改密：node server\\cli.mjs passwd')}`)
+    break
+  }
+
+  case 'logout': {
+    forgetToken()
+    console.log(`已清除本地令牌（${TOKEN_FILE}）`)
+    break
+  }
+
+  case 'passwd': {
+    const service = serviceOf(args.service)
+    const token = args.token ?? readStoredToken()
+    if (!token) {
+      console.error('未登录，无法改密。先跑 login。')
+      process.exit(1)
+    }
+    const next = args.password ?? (await readPassword('新密码（至少 12 位）：'))
+    if (next.length < 12) {
+      console.error('新密码至少 12 位')
+      process.exit(1)
+    }
+    const result = await postJson(`${service}/dsh-market/auth/password`, { newPassword: next }, token)
+    if (!result.ok) {
+      console.error(`改密失败：${result.body?.code ?? `HTTP ${result.status}`} ${result.body?.detail ?? ''}`)
+      process.exit(1)
+    }
+    console.log('密码已更新。如果是首登账号，现在可以正常使用了。')
     break
   }
 
@@ -255,3 +460,4 @@ switch (command) {
     console.error(`未知命令：${command}`)
     process.exit(1)
 }
+
