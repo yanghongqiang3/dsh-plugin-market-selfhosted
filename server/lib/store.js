@@ -381,6 +381,97 @@ export class Store {
     this.audit('login.ok', { username }, username)
     return { ok: true, user: this.findUser(username) }
   }
+
+  // ------------------------------------------------------------ dsh bindings
+
+  /** One row -> the shape the HTTP layer speaks. */
+  bindingRow(row) {
+    if (!row) return null
+    return {
+      dshUserId: row.dsh_user_id,
+      marketUsername: row.market_username,
+      dshName: row.dsh_name,
+      deviceId: row.device_id ?? null,
+      boundAt: row.bound_at,
+      boundBy: row.bound_by,
+    }
+  }
+
+  bindingForDsh(dshUserId) {
+    if (!dshUserId) return null
+    return this.bindingRow(this.db.prepare('SELECT * FROM dsh_bindings WHERE dsh_user_id = ?').get(dshUserId))
+  }
+
+  bindingForMarket(marketUsername) {
+    if (!marketUsername) return null
+    return this.bindingRow(this.db.prepare('SELECT * FROM dsh_bindings WHERE market_username = ?').get(marketUsername))
+  }
+
+  listBindings() {
+    return this.db
+      .prepare('SELECT * FROM dsh_bindings ORDER BY bound_at DESC')
+      .all()
+      .map((row) => this.bindingRow(row))
+  }
+
+  /**
+   * Bind a DSH account to a market account, enforcing one-to-one in BOTH directions.
+   *
+   * The operator's rule is 「一个 DSH 账号只能绑一个市场账号」. Returning a distinct code
+   * for each direction matters: "this DSH account is already bound" and "this market
+   * account is already claimed" need different things done about them, and a generic
+   * failure would leave the user unable to tell which side to unbind.
+   *
+   * Re-binding the SAME pair is a no-op success, so a page reload does not fail.
+   */
+  bindDshAccount({ dshUserId, marketUsername, dshName = '', deviceId = null, by = 'system', ip = null }) {
+    const dshId = String(dshUserId ?? '').trim()
+    const market = String(marketUsername ?? '').trim()
+    if (!dshId) return { ok: false, code: 'E_BAD_DSH_ID' }
+    if (!market) return { ok: false, code: 'E_BAD_MARKET_USER' }
+    if (!this.findUser(market)) return { ok: false, code: 'E_NO_SUCH_USER' }
+
+    const byDsh = this.bindingForDsh(dshId)
+    const byMarket = this.bindingForMarket(market)
+
+    if (byDsh && byMarket && byDsh.dshUserId === byMarket.dshUserId) {
+      // Already exactly this pair: refresh the display hint and report success.
+      this.db
+        .prepare('UPDATE dsh_bindings SET dsh_name = ?, device_id = ? WHERE dsh_user_id = ?')
+        .run(String(dshName ?? ''), deviceId ?? null, dshId)
+      return { ok: true, unchanged: true, binding: this.bindingForDsh(dshId) }
+    }
+    if (byDsh) {
+      return { ok: false, code: 'E_DSH_ALREADY_BOUND', detail: byDsh.marketUsername, binding: byDsh }
+    }
+    if (byMarket) {
+      return { ok: false, code: 'E_MARKET_ALREADY_BOUND', detail: '该市场账号已绑定另一个 DSH 账号', binding: byMarket }
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO dsh_bindings (dsh_user_id, market_username, dsh_name, device_id, bound_at, bound_by, bound_ip)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(dshId, market, String(dshName ?? ''), deviceId ?? null, Date.now(), by, ip)
+    this.audit('dsh.bind', { dshUserId: dshId, marketUsername: market, by }, by)
+    return { ok: true, binding: this.bindingForDsh(dshId) }
+  }
+
+  /**
+   * Unbind by EITHER side. Administration needs both directions: the DSH account may
+   * be the thing that changed (a new machine, a reinstall) while the market account
+   * stays, or the market account may be the thing being reassigned.
+   */
+  unbindDshAccount({ dshUserId = null, marketUsername = null, by = 'system' }) {
+    const row = dshUserId
+      ? this.db.prepare('SELECT * FROM dsh_bindings WHERE dsh_user_id = ?').get(dshUserId)
+      : this.db.prepare('SELECT * FROM dsh_bindings WHERE market_username = ?').get(marketUsername)
+    if (!row) return { ok: false, code: 'E_NOT_BOUND' }
+    this.db.prepare('DELETE FROM dsh_bindings WHERE dsh_user_id = ?').run(row.dsh_user_id)
+    this.audit('dsh.unbind', { dshUserId: row.dsh_user_id, marketUsername: row.market_username, by }, by)
+    return { ok: true, binding: this.bindingRow(row) }
+  }
 }
 
 function safeParse(text) {

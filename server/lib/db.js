@@ -97,6 +97,32 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS device_user_code ON device_auths(user_code);
 
+    /**
+     * DSH account <-> market account, strictly one to one.
+     *
+     * Decided by the operator: 「一个 DSH 账号只能绑一个市场账号」. Both directions are
+     * therefore unique, so a DSH account cannot acquire a second market identity and
+     * a market account cannot be claimed by a second DSH account. Making only
+     * dsh_user_id unique would let one market account serve many people, which is
+     * not what was asked for.
+     *
+     * dsh_name is a denormalised display hint so the console can show something
+     * human without a network round trip. It is never used for a decision.
+     *
+     * NOTE: this comment lives inside a template literal, so it must not contain a
+     * backtick — one did, and it terminated the SQL string early.
+     */
+    CREATE TABLE IF NOT EXISTS dsh_bindings (
+      dsh_user_id     TEXT PRIMARY KEY,
+      market_username TEXT NOT NULL UNIQUE REFERENCES users(username) ON DELETE CASCADE,
+      dsh_name        TEXT NOT NULL DEFAULT '',
+      device_id       TEXT,
+      bound_at        INTEGER NOT NULL,
+      bound_by        TEXT NOT NULL DEFAULT 'system',
+      bound_ip        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS dsh_bindings_market ON dsh_bindings(market_username);
+
     CREATE TABLE IF NOT EXISTS artifacts (
       name         TEXT NOT NULL,
       version      TEXT NOT NULL,

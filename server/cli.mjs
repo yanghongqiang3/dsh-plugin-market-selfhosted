@@ -12,7 +12,14 @@
  *   node server/cli.mjs grant:add  --group billing --pattern "@dsh-internal/dsh-plugin-*" [--deny]
  *   node server/cli.mjs grant:rm   --group billing --pattern "@dsh-internal/dsh-plugin-*"
  *   node server/cli.mjs member:add --user alice --group billing
+ *   node server/cli.mjs bind:list
+ *   node server/cli.mjs bind:add   --dsh-user <DSH 账号 ID> --user alice [--name 显示名]
+ *   node server/cli.mjs bind:rm    --dsh-user <DSH 账号 ID> | --user alice
  *   node server/cli.mjs catalog | audit [--limit 50] | prune
+ *
+ *   DSH 账号与市场账号是「一对一」绑定：一个 DSH 账号只能绑一个市场账号，反之亦然。
+ *   bind:add 用于管理员修复关系；正常情况下页面在登录时自己完成绑定。
+ *   bind:rm 可以按任意一侧释放，因为变更可能发生在任意一侧。
  *
  * ── 发布插件（不需要服务器 shell 权限，CI 也能用）────────────────────────────
  *   node server/cli.mjs login    --username alice [--service http://host:8787]
@@ -266,6 +273,85 @@ switch (command) {
     const { db, store } = open()
     const removed = store.removeGrant({ groupId: args.group, pluginPattern: args.pattern, by: 'cli' })
     console.log(`已删除 ${removed} 条规则`)
+    db.close()
+    break
+  }
+
+  /**
+   * DSH-identity bindings.
+   *
+   * `bind` is for repairing the relationship without the user having to log in again;
+   * the page binds itself on sign-in. Both `bind:list` and `bind:rm` exist because the
+   * one-to-one rule means an administrator has to be able to see which side is
+   * occupying a slot before deciding what to release.
+   *
+   * Accepts either side as the key: a DSH account may be the thing that changed (new
+   * machine, reinstall) or the market account may be the thing being reassigned.
+   */
+  case 'bind:list': {
+    const { db, store } = open()
+    const rows = store.listBindings()
+    if (rows.length === 0) console.log('（还没有任何绑定）')
+    for (const row of rows) {
+      console.log(
+        `${bold(row.marketUsername.padEnd(16))} ← DSH ${row.dshUserId}`
+        + `${row.dshName ? `  ${row.dshName}` : ''}`
+        + `  ${new Date(row.boundAt).toISOString().slice(0, 19)}`,
+      )
+    }
+    db.close()
+    break
+  }
+
+  case 'bind:rm': {
+    const { db, store } = open()
+    if (!args['dsh-user'] && !args.user) {
+      console.error('用法：bind:rm --dsh-user <DSH 账号 ID>  或  bind:rm --user <市场账号>')
+      db.close()
+      process.exitCode = 1
+      break
+    }
+    const result = store.unbindDshAccount({
+      dshUserId: args['dsh-user'] ?? null,
+      marketUsername: args.user ?? null,
+      by: 'cli',
+    })
+    if (!result.ok) {
+      console.error(`没有找到绑定（${result.code}）`)
+      process.exitCode = 1
+    } else {
+      console.log(`已解绑：市场账号 ${bold(result.binding.marketUsername)} ← DSH ${result.binding.dshUserId}`)
+    }
+    db.close()
+    break
+  }
+
+  case 'bind:add': {
+    const { db, store } = open()
+    if (!args['dsh-user'] || !args.user) {
+      console.error('用法：bind:add --dsh-user <DSH 账号 ID> --user <市场账号> [--name <显示名>]')
+      db.close()
+      process.exitCode = 1
+      break
+    }
+    const result = store.bindDshAccount({
+      dshUserId: args['dsh-user'],
+      marketUsername: args.user,
+      dshName: args.name ?? '',
+      by: 'cli',
+    })
+    if (!result.ok) {
+      const hint = result.code === 'E_DSH_ALREADY_BOUND'
+        ? `该 DSH 账号已绑定市场账号 ${result.detail}`
+        : result.code === 'E_MARKET_ALREADY_BOUND'
+          ? '该市场账号已绑定另一个 DSH 账号'
+          : result.detail ?? ''
+      console.error(`绑定失败（${result.code}）${hint ? `：${hint}` : ''}`)
+      console.error('一个 DSH 账号只能绑一个市场账号，两个方向都受限。先 bind:rm 释放再绑。')
+      process.exitCode = 1
+    } else {
+      console.log(`已绑定：市场账号 ${bold(args.user)} ← DSH ${args['dsh-user']}`)
+    }
     db.close()
     break
   }

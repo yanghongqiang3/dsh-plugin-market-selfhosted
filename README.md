@@ -23,6 +23,13 @@ DSH 内部插件市场，由**两部分**组成：
 > `layout.selectPanel(id)`，而**没有面板的 id 会抛错**。只注册图标不注册面板，就会得到一个
 > 看得见、点不动的行——比没有入口更糟。`verify-install.mjs` 现在会拦住这种写法。
 
+**身份绑定（可选，减少一次登录）**：DSH 账号与市场账号可以**一对一**绑定。绑定后安装页
+在登录时自动建立关系，用户不必在两处维护身份。宿主插件从 DSH 的账号服务读到账号 ID 与
+显示名，页面把它交给服务端，与**令牌所属的市场账号**绑定。
+
+> 绑定是**一对一**的：一个 DSH 账号只能绑一个市场账号，反之亦然。这是可配置的策略，
+> 当前按运营者指定实现为双向唯一。详细做法与坑见 §1.6。
+
 ---
 
 ## 0. 市场服务端
@@ -288,9 +295,15 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 & $node tools\test-host.mjs                                    # 宿主入口与路由契约
 & $node tools\test-server.mjs                                  # 服务端
 & $node tools\test-publish.mjs                                 # 发布/上传
+& $node tools\test-bindings.mjs                                # 绑定的 1:1 约束（直接打数据库）
+& $node tools\test-binding-http.mjs                            # 绑定路由（含越权与冲突码）
 & $node tools\verify-install.mjs "$env:USERPROFILE\.dsh\profiles\desktop"   # 安装与客户端契约预检
 & $node tools\check-docs.mjs                                   # 文档里的路径与代码片段是否仍然属实
 ```
+
+`test-bindings.mjs` 与 `test-binding-http.mjs` 分工明确：前者证明**数据库约束**在两个方向
+都成立（这条规则的实际执行点），后者证明**路由**没有绕过它——包括最关键的一条：
+市场账号只能来自令牌，不能来自请求体。
 
 `verify-install.mjs` 里那组"客户端契约"断言值得单独说：它们守的是**让客户端半边能加载的
 每一条硬性要求**（`dsh.client` 声明、`exports["./client"]`、factory id 等于包名、bare-name 行、
@@ -307,6 +320,73 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 ```
 
 它断言原生按钮**真的渲染出来了**（而不只是被组装了），并报告页面异常。
+
+### 1.6 身份绑定：DSH 账号 ↔ 市场账号
+
+**目的**：让用户不必在两处维护身份。DSH 那边已经登录了账号，安装页就直接用它。
+
+#### 数据从哪来
+
+宿主插件从 DSH 的组合账号服务读到账号，**实测结果**：
+
+| 调用 | 返回 | 代价 |
+|---|---|---|
+| `ctx.get('deepseekAccount')` | 服务对象 | 无 |
+| `getDeviceIdentity()` | `{ deviceId, osVersion }`，`userId` **不在里面** | 无（读本地凭证记录） |
+| `getProfile({version,locale,timezoneOffsetSeconds})` | `{ status:'ready', id, name, contact }` | **要联网**，向 `platform.deepseek.com` 发请求 |
+| 再调 `getDeviceIdentity()` | `{ deviceId, userId, osVersion }` | 无 |
+
+> **`userId` 不会自己出现。** 实现里 `getPlatformSession()` 是这么算的：
+> `userId: lastProfile?.token === stored.token ? lastProfile.profile.value.id : null`
+> ——只有**成功读过一次 profile** 之后，账号 ID 才可用。
+
+#### 一对一规则
+
+**一个 DSH 账号只能绑一个市场账号，反之亦然。** 两个方向都由数据库唯一约束强制，
+测试逐条验证（`tools/test-bindings.mjs`）。
+
+冲突返回**两个不同的错误码**，因为处理方式不同：
+
+| 错误码 | 含义 | 该怎么办 |
+|---|---|---|
+| `E_DSH_ALREADY_BOUND` | 这台机器的 DSH 账号已经绑了别的市场账号 | 用那个市场账号登录，或让管理员解绑 |
+| `E_MARKET_ALREADY_BOUND` | 这个市场账号已经绑了别的 DSH 账号 | 让管理员解绑后再试 |
+
+同一对重复绑定是**幂等成功**（`unchanged: true`），所以刷新页面不会报错。
+
+#### 身份不能来自请求体
+
+市场账号那一侧**只取自令牌**，永远不读请求体。测试专门验证：带
+`{ dshUserId, marketUsername: 'alice' }` 去请求、但令牌属于 bob 时，**绑定给 bob**。
+
+DSH 账号那一侧来自本机插件的 `/dsh-market/identity`，它**不转发平台凭据**——
+`getPlatformSession()` 会返回活的 token，而只想显示身份的页面没有理由持有它。
+`verify-install.mjs` 断言宿主半边从不调用 `getPlatformSession`，且身份函数里不出现 `token`。
+
+#### 读不到就没有
+
+三种情况都**不是错误**，只是没有身份可用，页面退回普通登录：
+
+| `source` | 含义 |
+|---|---|
+| `account` | 有稳定账号 ID，可以绑定 |
+| `device-only` | 已登录但没读到账号 ID（未调用 profile / 读取失败） |
+| `none` | 未登录 DSH，或账号服务不可用 |
+
+> **因此它不能作为唯一权威。** 依赖「用户登录着 DSH 账号」且「网络可达」，
+> 所以账号登录必须保留为回退路径——这不是可选设计，是前提。
+
+#### 管理
+
+控制台「身份绑定」面板可以查看与解绑。CLI：
+
+```bash
+node server/cli.mjs bind:list
+node server/cli.mjs bind:add --dsh-user <DSH 账号 ID> --user <市场账号> [--name 显示名]
+node server/cli.mjs bind:rm  --dsh-user <DSH 账号 ID>     # 或 --user <市场账号>
+```
+
+`bind:rm` 支持两个方向，因为变更可能发生在任意一侧（换机器、重装，或人员调整）。
 
 ---
 

@@ -666,6 +666,80 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     route('GET', path, (_req, res) => staticFile(res, file, type), { auth: 'none' })
   }
 
+  // ------------------------------------------------------------ dsh bindings
+  //
+  // Tying a DSH account to a market account, so a user does not have to log in a
+  // second time inside the DSH page. The DSH account id comes from the HOST PLUGIN,
+  // which reads it from the composed account service; the market account comes from
+  // the caller's bearer token. Those two facts are combined HERE and nowhere else,
+  // which is what stops a caller from claiming someone else's DSH identity.
+  //
+  // The operator's rule is one-to-one (「一个 DSH 账号只能绑一个市场账号」); the store
+  // enforces both directions and reports which side collided.
+
+  route('GET', '/dsh-market/identity/lookup', (req, res, _caller, url) => {
+    const dshUserId = String(url.searchParams.get('dshUserId') ?? '').trim()
+    if (!dshUserId) {
+      json(res, 400, { ok: false, code: 'E_BAD_DSH_ID' })
+      return
+    }
+    const binding = store.bindingForDsh(dshUserId)
+    // Reports only WHETHER the account is bound, never to whom: an unauthenticated
+    // caller must not be able to enumerate other people's accounts.
+    json(res, 200, { ok: true, bound: binding !== null })
+  }, { auth: 'none' })
+
+  route('POST', '/dsh-market/identity/bind', async (req, res, caller) => {
+    const body = await readBody(req)
+    const result = store.bindDshAccount({
+      dshUserId: body?.dshUserId,
+      marketUsername: caller.user.username,
+      dshName: body?.dshName ?? '',
+      deviceId: body?.deviceId ?? null,
+      by: caller.user.username,
+      ip: clientInfo(req).ip,
+    })
+    if (!result.ok) {
+      const status = result.code === 'E_NO_SUCH_USER' || result.code === 'E_BAD_DSH_ID' ? 400 : 409
+      json(res, status, { ok: false, code: result.code, detail: result.detail ?? null })
+      return
+    }
+    json(res, 200, { ok: true, unchanged: result.unchanged === true, binding: result.binding })
+  })
+
+  route('GET', '/dsh-market/identity/me', (req, res, caller) => {
+    json(res, 200, { ok: true, binding: store.bindingForMarket(caller.user.username) })
+  })
+
+  /**
+   * Every binding, for the console.
+   *
+   * Being able to SEE who holds a slot is what makes the one-to-one rule workable:
+   * a conflict message names the other side, and an administrator has to be able to
+   * look up which account that is before releasing anything.
+   */
+  route('GET', '/dsh-market/admin/identity', (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    json(res, 200, { ok: true, bindings: store.listBindings() })
+  }, { auth: 'none' })
+
+  route('POST', '/dsh-market/admin/identity/unbind', async (req, res) => {
+    const who = admin(req, res)
+    if (!who) return
+    const body = await readBody(req)
+    const result = store.unbindDshAccount({
+      dshUserId: body?.dshUserId ?? null,
+      marketUsername: body?.marketUsername ?? null,
+      by: who.username,
+    })
+    if (!result.ok) {
+      json(res, 404, { ok: false, code: result.code })
+      return
+    }
+    json(res, 200, { ok: true, binding: result.binding })
+  }, { auth: 'none' })
+
   // ----------------------------------------------------------------- dispatch
 
   const server = createServer(async (req, res) => {

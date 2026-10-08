@@ -70,6 +70,7 @@
       <button class="btn navbtn on" data-panel="users">账号</button>
       <button class="btn navbtn" data-panel="groups">权限组</button>
       <button class="btn navbtn" data-panel="grants">组 → 插件规则</button>
+      <button class="btn navbtn" data-panel="identity">身份绑定</button>
       <button class="btn navbtn" data-panel="publish">发布插件</button>
       <button class="btn navbtn" data-panel="artifacts">制品</button>
     </nav>
@@ -145,6 +146,23 @@
         </section>
       </section>
 
+      <!-- 身份绑定 -->
+      <section class="pane hidden" id="pane-identity">
+        <div class="note">
+          DSH 账号与市场账号是<strong>一对一</strong>绑定：一个 DSH 账号只能绑一个市场账号，
+          反过来一个市场账号也只能绑一个 DSH 账号。两个方向都受限，所以冲突提示会指出是哪一侧被占用。
+          <br />绑定由 DSH 安装页在登录时自动完成；这里用于查看与释放。
+          同一对重复绑定是幂等的（刷新页面不会报错）。
+          <br />CLI：<code>node server/cli.mjs bind:list</code> /
+          <code>bind:rm --user &lt;市场账号&gt;</code> /
+          <code>bind:rm --dsh-user &lt;DSH 账号 ID&gt;</code>
+        </div>
+        <section class="panel">
+          <h2>当前绑定<span class="meta" id="bindings-count"></span></h2>
+          <div class="table" id="bindings-table"></div>
+        </section>
+      </section>
+
       <!-- 发布 -->
       <section class="pane hidden" id="pane-publish">
         <div class="note">
@@ -210,6 +228,7 @@ let users = []
 let groups = []
 let grants = []
 let artifacts = []
+let bindings = []
 /** Set by a successful dry run; 确认发布 reuses the exact bytes and options. */
 let pendingPublish = null
 
@@ -227,17 +246,20 @@ function showPane(name) {
 // ------------------------------------------------------------------- 账号
 
 async function loadAdmin() {
-  const [u, g, gr] = await Promise.all([
+  const [u, g, gr, b] = await Promise.all([
     service('/dsh-market/admin/users'),
     service('/dsh-market/admin/groups'),
     service('/dsh-market/admin/grants'),
+    service('/dsh-market/admin/identity'),
   ])
   users = u.body?.users ?? []
   groups = g.body?.groups ?? []
   grants = gr.body?.grants ?? []
+  bindings = b.body?.bindings ?? []
   renderUsers()
   renderGroups()
   renderGrants()
+  renderBindings()
 }
 
 function renderUsers() {
@@ -406,6 +428,50 @@ function renderGrants() {
       })
       if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
       status('规则已删除。')
+      await loadAdmin()
+    }, true))
+    row.appendChild(actions)
+    table.appendChild(row)
+  }
+}
+
+// ------------------------------------------------------------------- 身份绑定
+
+function renderBindings() {
+  const table = $('bindings-table')
+  table.textContent = ''
+  $('bindings-count').textContent = `　${bindings.length} 条`
+  if (bindings.length === 0) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = '还没有绑定。用户在 DSH 安装页登录时会自动建立绑定。'
+    table.appendChild(empty)
+    return
+  }
+  for (const binding of bindings) {
+    const row = trow([
+      [binding.marketUsername],
+      [binding.dshName || '—'],
+      // The DSH account id is long and is the thing an administrator has to compare
+      // against a conflict message, so it is shown in full.
+      [binding.dshUserId],
+      [new Date(binding.boundAt).toLocaleString()],
+    ])
+    const actions = document.createElement('div')
+    actions.className = 'cell-actions'
+    actions.appendChild(miniButton('解绑', async () => {
+      const confirmed = confirm(
+        `解除绑定：市场账号「${binding.marketUsername}」← DSH「${binding.dshName || binding.dshUserId}」？\n\n`
+        + '解绑后该 DSH 账号可以绑到别的市场账号，该市场账号也可以绑到别的 DSH 账号。',
+      )
+      if (!confirmed) return
+      // Unbind by DSH id: it is the side that identifies the row unambiguously.
+      const result = await service('/dsh-market/admin/identity/unbind', {
+        method: 'POST',
+        body: { dshUserId: binding.dshUserId },
+      })
+      if (!result.ok) { status(result.body?.detail || result.body?.code, true); return }
+      status(`已解绑：${binding.marketUsername} ← DSH ${binding.dshUserId}。`)
       await loadAdmin()
     }, true))
     row.appendChild(actions)

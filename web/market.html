@@ -76,13 +76,35 @@ const { $, state, service, local, show, status, setWho, tag } = S
 let catalog = null
 const installedMap = new Map()
 
+/**
+ * This machine's DSH account, as the host plugin reports it.
+ *
+ * `source` is one of `account` (a stable DSH account id is available), `device-only`
+ * (signed in but no account id yet — the host's profile read did not happen or
+ * failed) or `none` (not signed into DSH, or the service is absent). Only `account`
+ * can be bound, because only it is a stable identity.
+ */
+let dshIdentity = { source: 'none', userId: null, name: null, deviceId: null, reason: null }
+/** The binding the service reports for the signed-in market account. */
+let binding = null
+
+function dshLabel() {
+  if (dshIdentity.source === 'account') return `${dshIdentity.name ?? 'DSH 账号'}（已绑定）`
+  if (dshIdentity.source === 'device-only') return `DSH 账号未取得账号 ID：${dshIdentity.reason ?? '未知原因'}`
+  return `未检测到 DSH 账号：${dshIdentity.reason ?? '未知原因'}`
+}
+
 // ---------------------------------------------------------------------- 渲染
 
 function renderNote() {
   const consoleUrl = `${String(state.serviceUrl ?? '').replace(/\/+$/, '')}/console`
+  const bindLine = binding
+    ? `DSH 账号：${binding.dshName || binding.dshUserId}（${binding.dshUserId}）`
+    : `DSH 账号：${dshLabel()}`
   $('note').textContent =
     `服务端：${state.serviceUrl}\n` +
     `已登录：${catalog.user?.displayName ?? catalog.user?.username}　权限组：${(catalog.groups || []).join('、') || '无组'}\n` +
+    `${bindLine}\n` +
     `本机 profile：${state.profileDir ?? '(未知)'}\n` +
     '只显示你的权限组被授权的条目（默认拒绝，deny 优先）。下载与判定在服务端，落盘在本机。\n' +
     `账号、权限、发布由管理员在服务端控制台处理：${consoleUrl}`
@@ -289,11 +311,90 @@ async function doUninstall(entry, button) {
   }
 }
 
+// ------------------------------------------------------------------ 身份绑定
+
+/**
+ * Ask the host plugin who this machine's DSH account is.
+ *
+ * Local, same-origin, and never fatal: any failure means "no identity", and the page
+ * simply falls back to its own login.
+ */
+async function loadDshIdentity() {
+  try {
+    const result = await local('/dsh-market/identity')
+    const body = result.body
+    if (body && typeof body === 'object' && typeof body.source === 'string') {
+      dshIdentity = {
+        source: body.source,
+        userId: body.userId ?? null,
+        name: body.name ?? null,
+        deviceId: body.deviceId ?? null,
+        reason: body.reason ?? null,
+      }
+    }
+  } catch (error) {
+    dshIdentity = { source: 'none', userId: null, name: null, deviceId: null, reason: String(error?.message ?? error) }
+  }
+  return dshIdentity
+}
+
+/**
+ * Bind this DSH account to the signed-in market account.
+ *
+ * The rule is one-to-one, and the service enforces BOTH directions, so a conflict
+ * says which side collided. Those two cases need different actions from the user or
+ * an administrator, so they are reported differently rather than as one failure.
+ *
+ * A machine with no stable DSH account id is not an error: it just keeps using the
+ * ordinary login, which is also the only option for someone not signed into DSH.
+ */
+async function bindIdentity() {
+  if (dshIdentity.source !== 'account' || !dshIdentity.userId) return { skipped: true }
+  const result = await service('/dsh-market/identity/bind', {
+    method: 'POST',
+    body: {
+      dshUserId: dshIdentity.userId,
+      dshName: dshIdentity.name ?? '',
+      deviceId: dshIdentity.deviceId ?? null,
+    },
+  })
+  if (result.ok) {
+    binding = result.body?.binding ?? null
+    return { ok: true, unchanged: result.body?.unchanged === true }
+  }
+  return { ok: false, code: result.body?.code, detail: result.body?.detail }
+}
+
+/** Report a binding conflict so the user knows which side to ask about. */
+function reportBindFailure(failure) {
+  if (failure.code === 'E_MARKET_ALREADY_BOUND') {
+    status(
+      '这个市场账号已经绑定了另一个 DSH 账号。一个市场账号只能绑一个 DSH 账号，'
+      + '需要管理员在服务端控制台解绑后再试。',
+      true,
+    )
+    return
+  }
+  if (failure.code === 'E_DSH_ALREADY_BOUND') {
+    status(
+      `这台机器的 DSH 账号已经绑定了市场账号「${failure.detail ?? '(未知)'}」。`
+      + '一个 DSH 账号只能绑一个市场账号，请用那个账号登录，或让管理员先解绑。',
+      true,
+    )
+    return
+  }
+  status(`身份绑定失败：${failure.detail ?? failure.code ?? '未知原因'}（仍可正常安装，只是未绑定）`, true)
+}
+
 // ------------------------------------------------------------------ 装配
 
 S.onAuthenticated(async () => {
   setWho(state.me?.displayName ?? state.me?.username ?? '')
-  $('login-service').textContent = `服务端：${state.serviceUrl}`
+  // include the DSH label: the login hint already shows it, and overwriting with the
+  // service URL alone would drop it.
+  $('login-service').textContent = `服务端：${state.serviceUrl}\n${dshLabel()}`
+  const failure = await bindIdentity()
+  if (failure.ok === false) reportBindFailure(failure)
   // Installed state first, then the catalog: the grid decides each card's buttons
   // from `installedMap`, so drawing it before the list arrives offers 安装 for
   // plugins that are already here.
@@ -311,9 +412,17 @@ $('noService-retry').addEventListener('click', () => location.reload())
 
 S.init({
   views: ['noService', 'login', 'password', 'market'],
+  // Read the DSH identity BEFORE anything else: the post-login binding needs it, and
+  // on a reload with a stored token `enter()` would otherwise run first.
+  beforeBoot: loadDshIdentity,
   onView: (view) => {
     $('refresh').classList.toggle('hidden', view !== 'market')
     $('logout').classList.toggle('hidden', view !== 'market')
+    // Show which DSH account this machine carries on the LOGIN screen too, so the
+    // user knows what will be bound before signing in.
+    if (view === 'login') {
+      $('login-service').textContent = `服务端：${state.serviceUrl}\n${dshLabel()}`
+    }
   },
   onLogout: () => {
     catalog = null

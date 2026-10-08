@@ -303,6 +303,12 @@
       }
     }
 
+    // Page-specific setup that must finish before the flow continues. The install
+    // page uses it to read this machine's DSH identity, which has to be known before
+    // the post-login binding runs — and, on a reload with a token already stored,
+    // before `enter()` fires at all.
+    if (typeof options.beforeBoot === 'function') await options.beforeBoot()
+
     if (options.serveSelf === true) {
       state.serviceUrl = global.location.origin
       state.serviceConfigured = true

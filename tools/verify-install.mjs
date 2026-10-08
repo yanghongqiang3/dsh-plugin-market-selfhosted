@@ -195,6 +195,80 @@ if (fs.existsSync(pagePath)) {
 const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
 
 /**
+ * DSH-identity binding, and the one thing it must never leak.
+ *
+ * A plugin can read this machine's DSH account (id, name, device id) from the
+ * composed account service. The page uses that so a user does not log in twice.
+ * What it must NOT do is hand the page the platform CREDENTIAL: `getPlatformSession()`
+ * returns a live token, and a page that only wants to display an identity has no
+ * business holding one. A one-line mistake would expose it to any script on the page.
+ */
+{
+  // Strip comments before matching. A first version did not, and failed on the very
+  // comment that documents this rule — the same self-inflicted false positive this
+  // project has hit repeatedly.
+  const pluginCode = pluginSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+
+  if (!/PREFIX\}\/identity/.test(pluginSource)) {
+    fail('lib/plugin.js has no /dsh-market/identity route — the page cannot learn the DSH account')
+  } else {
+    ok('host plugin exposes /dsh-market/identity')
+  }
+  if (/getPlatformSession/.test(pluginCode)) {
+    fail('lib/plugin.js calls getPlatformSession — that returns a live platform token and must not reach the page')
+  } else {
+    ok('host plugin never calls getPlatformSession (no credential exposure)')
+  }
+  // Only the identity reader matters here: `token` legitimately appears elsewhere in
+  // this file (the install route forwards the caller's own market token to the
+  // service). The check is scoped to the function that builds the page's payload.
+  const identityFn = /async function readDshIdentity[\s\S]*?\n\}/.exec(pluginCode)?.[0] ?? ''
+  if (identityFn === '') {
+    fail('could not find readDshIdentity in lib/plugin.js')
+  } else if (/token/i.test(identityFn)) {
+    fail('readDshIdentity mentions a token — the page payload must carry no credential')
+  } else {
+    ok('readDshIdentity returns no credential field')
+  }
+
+  const marketPath = path.join(dir, 'web', 'market.html')
+  if (fs.existsSync(marketPath)) {
+    const market = fs.readFileSync(marketPath, 'utf8')
+    market.includes('/dsh-market/identity/bind')
+      ? ok('install page binds the DSH account on sign-in')
+      : fail('install page never binds the DSH account')
+    // The service sends the market side; a body field would let a caller claim another
+    // account, so the payload must not carry one.
+    if (/marketUsername/.test(market)) {
+      fail('install page sends marketUsername in the bind body — the market side must come from the token only')
+    } else {
+      ok('install page does not send a market account in the bind body')
+    }
+    for (const code of ['E_DSH_ALREADY_BOUND', 'E_MARKET_ALREADY_BOUND']) {
+      market.includes(code)
+        ? ok(`install page explains the ${code} conflict`)
+        : fail(`install page does not distinguish ${code} — the user cannot tell which side to release`)
+    }
+    market.includes('beforeBoot')
+      ? ok('install page reads the DSH identity before the boot flow continues')
+      : fail('install page does not read the identity before boot — the binding could run without it')
+  }
+
+  const consolePath2 = path.join(dir, 'web', 'console.html')
+  if (fs.existsSync(consolePath2)) {
+    const consolePage = fs.readFileSync(consolePath2, 'utf8')
+    consolePage.includes('/dsh-market/admin/identity')
+      ? ok('console lists the bindings')
+      : fail('console cannot list the bindings — an administrator cannot see who holds a slot')
+    consolePage.includes('/dsh-market/admin/identity/unbind')
+      ? ok('console can release a binding')
+      : fail('console cannot release a binding')
+  }
+}
+
+/**
  * Two surfaces, two jobs — and neither may grow into the other again.
  *
  * The single-page version put a 权限管理 tab next to the plugin catalog. Every user
