@@ -1195,6 +1195,31 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource5.includes('const merged = new Map()')
     ? ok('  同一项被移除多次只记一条（回执回答"什么没了"）')
     : fail('  回执会累积重复条目 —— 计数与内容对不上')
+
+  /**
+   * The status line must not compete with the content for width.
+   *
+   * Reported as "the 制品 column shows only the first letter after clicking 召回, and refreshing
+   * fixes it". The table was innocent: `.status` was a third child of the `#view-console` flex
+   * row, so writing a message into it took width from the panes — measured 336px stolen, the
+   * panes falling from ~760 to 424, and the artifacts table squeezed until its only shrinkable
+   * column hit 30px, which renders as about one glyph. A refresh clears the message and restores
+   * the width, which is exactly why the symptom looked intermittent.
+   */
+  const consoleCssLayout = fs.readFileSync(path.join(dir, 'web', 'console.css'), 'utf8')
+  const statusOwnLine = /#view-console\s*>\s*\.status\s*\{[^}]*flex:\s*1\s+0\s+100%/.test(consoleCssLayout)
+  statusOwnLine
+    ? ok('状态栏独占一行（它不该跟内容抢宽度）')
+    : fail('  状态栏与内容同行 —— 写一条消息就会把表格挤到只剩一个字')
+  // ...and the table cannot be collapsed by anything else either.
+  const marketCssLayout = fs.readFileSync(path.join(dir, 'web', 'market.css'), 'utf8')
+  const growFloor = /\.tr\s*>\s*\.grow\s*\{[^}]*min-width:\s*\d+px/.test(marketCssLayout)
+  growFloor
+    ? ok('  名字列有下限（不会被压扁到不可读）')
+    : fail('  名字列可以缩到 0 —— 任何宽度缺口都从它身上出')
+  marketCssLayout.includes('col-narrow-hide')
+    ? ok('  窄屏先隐藏次要列，而不是把操作按钮挤出视野')
+    : fail('  窄屏没有让位策略')
 }
 
 /**

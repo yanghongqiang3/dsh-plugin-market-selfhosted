@@ -58,6 +58,7 @@ const SUITES = [
   ['撤回可见性', 'probe-revoked-visibility.mjs', []],
   ['召回', 'probe-recall.mjs', []],
   // Needs a real browser; it reports SKIPPED rather than pretending to pass.
+  ['控制台布局', 'probe-console-layout.mjs', []],
   ['安装页界面', 'probe-market-ui.mjs', []],
 ]
 

@@ -957,8 +957,11 @@ function renderArtifacts() {
   const { entries, total } = lists.artifacts
   $('artifacts-count').textContent = `　${total} 个`
   table.appendChild(thead([
-    ['制品', 'grow'], ['类型', 'col-kind'], ['版本', 'col-role'], ['通道', 'col-role'],
-    ['状态', 'col-status'], ['召回', 'col-status'], ['大小', 'col-status'], ['', 'col-actions'],
+    ['制品', 'grow'], ['类型', 'col-kind'], ['版本', 'col-role'],
+    // Secondary columns: dropped before the name is ever squeezed (see `.col-narrow-hide`).
+    ['通道', 'col-role col-narrow-hide'],
+    ['状态', 'col-status'], ['召回', 'col-status'],
+    ['大小', 'col-status col-narrow-hide'], ['', 'col-actions'],
   ]))
   if (entries.length === 0) {
     const empty = document.createElement('div')
@@ -996,7 +999,7 @@ function renderArtifacts() {
       [artifact.name, 'grow'],
       [kindLabels[kind] ?? kind, `col-kind kind-${kind}`],
       [artifact.version, 'col-role'],
-      [artifact.channel, 'col-role'],
+      [artifact.channel, 'col-role col-narrow-hide'],
       [state, 'col-status ' + (state === 'published' ? 'ok' : (state === 'revoked' ? 'bad' : ''))],
       /**
        * Recall gets its own column rather than being folded into the state.
@@ -1006,7 +1009,7 @@ function renderArtifacts() {
        * an operator actually asked for.
        */
       [artifact.recalled === true ? '已召回' : '', 'col-status ' + (artifact.recalled === true ? 'bad' : '')],
-      [`${artifact.sizeBytes ?? 0} B`, 'col-status'],
+      [`${artifact.sizeBytes ?? 0} B`, 'col-status col-narrow-hide'],
     ])
     const actions = document.createElement('div')
     actions.className = 'cell-actions'

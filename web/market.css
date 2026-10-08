@@ -188,7 +188,14 @@
   .panel{border:1px solid var(--border1);background:var(--layer1);border-radius:9px;
          padding:12px 13px;margin-bottom:14px}
   .panel h2{font-size:13px;margin:0 0 10px;display:flex;gap:8px;align-items:baseline}
-  .table{display:flex;flex-direction:column}
+  /**
+   * The table scrolls sideways rather than crushing a column.
+   *
+   * A column floor (see `.grow` below) means a narrow window cannot squeeze the name cell out of
+   * legibility — the row keeps its width and the container scrolls. Without `overflow-x` here the
+   * floor would simply clip the right-hand columns instead, which is the same defect moved.
+   */
+  .table{display:flex;flex-direction:column;overflow-x:auto}
   /**
    * Table rows.
    *
@@ -220,8 +227,27 @@
    * and every column to their right was offset by ~14px. A zero basis makes the width a
    * pure function of the available space, so the headings sit exactly over their cells
    * whatever the content is.
+   *
+   * The `min-width` is a FLOOR, and it is load-bearing. Every other column is `flex:0 0 <px>`
+   * and the actions cell cannot shrink at all, so `.grow` is the only cell that can give: any
+   * width the fixed columns cannot fit came straight out of the name. Measured on the console's
+   * artifacts table (8 columns, 598px of fixed width), a 900px window left the name column
+   * **30px** — and `overflow:hidden` turned that into "only the first letter". The floor keeps
+   * it readable; the table scrolls horizontally instead of collapsing the one column that
+   * carries the identity of the row.
    */
-  .tr > .grow{flex:2 1 0}
+  .tr > .grow{flex:2 1 0;min-width:160px}
+  /**
+   * Drop the secondary columns before the name is squeezed.
+   *
+   * A floor alone only moves the problem: measured at 900px the name stays readable but the
+   * whole table scrolls sideways, which pushes the ACTION buttons — the reason anyone opens this
+   * pane — out of view. 通道 and 大小 are reference information; they go first, and only in the
+   * console (the market page's rows do not carry this class).
+   */
+  @media (max-width: 1040px){
+    .tr > .col-narrow-hide{display:none}
+  }
   .tr > .col-role{flex:0 0 56px}
   .tr > .col-status{flex:0 0 64px}
   /**

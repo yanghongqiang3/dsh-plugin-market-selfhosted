@@ -11,7 +11,22 @@
 
 .wrap:has(#view-console:not(.hidden)) { max-width: 1180px; }
 
-#view-console { display: flex; gap: 18px; align-items: flex-start; }
+/**
+ * The nav, the panes, and — the bug — the status line, which used to be a third child of this
+ * flex row and competed with the panes for width.
+ *
+ * Measured: with `.status` empty the panes were ~760px wide; the moment a message was written
+ * into it, `.status` took 336px and the panes collapsed to 424px, which squeezed the artifacts
+ * table until its only shrinkable column (the name) hit 30px — rendering as about one glyph.
+ * Reported as "the 制品 column shows only the first letter, and refreshing fixes it": a refresh
+ * clears the status line, which restores the width. The cause was never the table.
+ *
+ * So the status message gets its OWN line. A status line must never take space from the content
+ * it is describing.
+ */
+#view-console { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+
+#view-console > .status { flex: 1 0 100%; width: 100%; }
 
 .side {
   display: flex; flex-direction: column; gap: 4px;
