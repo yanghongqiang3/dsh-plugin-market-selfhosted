@@ -14,24 +14,29 @@
 #     Rows exist because a patch inserts them — which is what the insert below
 #     does. Copying files into node_modules mounts nothing on its own.
 #
-# One row, deliberately. A browser half (`dsh.client`) would need a SECOND row
-# whose `name` is the BARE package name — `dsh-client-modules` resolves a row's
+# ONE row, deliberately. A browser half (`dsh.client`) needs a SECOND row whose
+# `name` is the BARE package name, because `dsh-client-modules` resolves a row's
 # package.json through `exactPackageSpecifier`, which returns undefined for any
-# specifier containing "/", after which `locatePkgJson` drops the row silently.
+# specifier containing "/" — after which `locatePkgJson` drops the row SILENTLY.
 #
-# That route is written but DISABLED: lib/client.js is a complete client module
+# That route is written but DISABLED. lib/client.js is a complete client module
 # (plain script, react from the platform seed, registrations for
-# `sidebar.panellist` and `sidebar.footer.action`), and the two-row arrangement
-# was tried. Both rows' modules imported successfully — proven with an import
-# probe, see the git history of lib/bundle.js — yet the activation audit still
-# reported the bare-name row as "failed to import", and a structurally identical
-# control package in the same profile did not. Until that difference is
-# explained, enabling it would put a needless
-# `warning: 1 entry did not activate` on every launch. The in-app entry is
-# injected through `webserver/index-inject` instead (README §4.1), which is
-# verified working.
+# `sidebar.panellist` and `sidebar.footer.action`). It was enabled and tested:
 #
-# To re-enable: add `dsh.client` back to package.json, restore the `./client`
+#   - both rows' modules imported successfully, proven with an import probe
+#     (`[bundle] bare-name entry imported`, `[probe] plugin.js imported`, and
+#     `apply` ran, registering 6/6 routes);
+#   - yet the browser's boot graph (`__DSH_BOOT__.entries`) never received
+#     `dsh-plugin-marketplace`, and the host audit reported
+#     `marketplace-client (dsh-plugin-marketplace): failed to import`;
+#   - a structurally identical control package (`dsh-client-smoke`, same
+#     directory, same manifest shape, no `dependencies` entry) activated fine.
+#
+# Until that difference is explained, enabling the row would put a
+# `warning: 1 entry did not activate` on every launch. The in-app entry is
+# injected through `webserver/index-inject` instead (README §4.1).
+#
+# To re-enable: restore `dsh.client` in package.json, restore the `./client`
 # export, and add `- id: marketplace-client` / `name: dsh-plugin-marketplace`.
 
 - insert:
@@ -41,4 +46,3 @@
 # Verify after a DSH restart: ~/.dsh/plugin-marketplace-diag.log should record
 #   [entry] registered webserver/index-inject rows (desktop + web shell)
 #   [register] registered 6/6 routes
-

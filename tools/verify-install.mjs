@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
 
 const profileDir =
   process.argv[2] ?? path.join(process.env.USERPROFILE ?? '', '.dsh', 'profiles', 'desktop')
@@ -146,6 +147,41 @@ if (fs.existsSync(pagePath)) {
 
 // The client must not carry its own account/policy authority any more.
 const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
+
+// The positioning script used to be a template literal inside lib/plugin.js, where
+// `node --check` cannot see it and a syntax error fails ONLY in the browser: the
+// entry stayed `display:none` on every launch while every host-side check was
+// green. It now lives in its own file, and this asserts the GENERATED script
+// actually parses — a string heuristic (looking for stray "*" lines) was tried
+// first and produced false positives on ordinary JSDoc.
+{
+  const scriptPath = path.join(dir, 'lib', 'entry-position.js')
+  if (!fs.existsSync(scriptPath)) {
+    fail('lib/entry-position.js missing — the injected placement script has no home')
+  } else {
+    ok('injected placement script has its own file (lib/entry-position.js)')
+    pluginSource.includes("from './entry-position.js'")
+      ? ok('lib/plugin.js imports the placement script')
+      : fail('lib/plugin.js does not import lib/entry-position.js')
+    try {
+      const { entryPositionScript } = await import(pathToFileURL(scriptPath).href)
+      const generated = entryPositionScript('dsh-marketplace-entry')
+      try {
+        // Parsing only: this must never run here.
+        new Function(generated)
+        ok(`generated placement script parses (${generated.length} chars)`)
+      } catch (error) {
+        fail(`generated placement script has a syntax error — the entry would never appear: ${error.message}`)
+      }
+      generated.includes('dsh-marketplace-entry')
+        ? ok('generated script targets the entry element id')
+        : fail('generated script does not mention the entry element id')
+    } catch (error) {
+      fail(`could not import lib/entry-position.js: ${String(error?.message ?? error)}`)
+    }
+  }
+}
+
 for (const stale of ['market-store.js', 'market-policy.js']) {
   pluginSource.includes(stale)
     ? fail(`lib/plugin.js still imports ${stale} — authority belongs to the service`)

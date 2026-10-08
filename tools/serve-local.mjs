@@ -90,10 +90,17 @@ const SHELL_WITH_SIDEBAR = `<!doctype html>
       <aside class="side">
         <div class="nav">新会话</div>
         <div class="nav">插件</div>
-        <div class="sec" id="workspace-section">工作区</div>
-        <div class="list">
-          <div class="row">dsh</div>
-          <div class="row">内部插件市场方案设计</div>
+        <!-- The wrappers are deliberate: in the real sidebar the heading and the
+             session list are NOT siblings. An anchoring scheme that assumed they
+             were fell back to "above the heading" and landed on the 插件 row. -->
+        <div class="region">
+          <div class="sec" id="workspace-section">工作区</div>
+          <div class="body">
+            <div class="list">
+              <div class="row">dsh</div>
+              <div class="row">内部插件市场方案设计</div>
+            </div>
+          </div>
         </div>
         <div class="foot">
           <div class="row">设置</div>

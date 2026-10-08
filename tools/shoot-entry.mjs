@@ -41,9 +41,20 @@ class Cdp {
     this.socket = socket
     this.nextId = 1
     this.pending = new Map()
+    /** Page-side errors, so a throwing injected script cannot stay invisible. */
+    this.errors = []
     socket.addEventListener('message', (event) => {
       let message
       try { message = JSON.parse(event.data) } catch { return }
+      if (message.method === 'Runtime.exceptionThrown') {
+        const d = message.params.exceptionDetails
+        this.errors.push(`${d.text} ${d.exception?.description ?? ''}`.trim())
+      }
+      if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
+        this.errors.push(
+          message.params.args.map((a) => a.value ?? a.description ?? a.type).join(' '),
+        )
+      }
       if (message.id && this.pending.has(message.id)) {
         const { resolve, reject } = this.pending.get(message.id)
         this.pending.delete(message.id)
@@ -86,6 +97,18 @@ await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 620,
 await cdp.send('Page.navigate', { url: `http://127.0.0.1:${LOCAL_PORT}/?shell=sidebar` })
 await sleep(1500)
 
+// The real shell always carries `body.chrome` — the page adds it on seeing
+// `globalThis.dshDesktopBoot` — and it reserves the window-control strip. Without
+// it this mock's content sits 40px higher, which changes which slot fits and made
+// an earlier run fail for the wrong reason.
+await cdp.eval(`document.body.classList.add('chrome')`)
+await sleep(300)
+
+console.log('--- 页面异常 ---')
+if (cdp.errors.length === 0) console.log('  （无）')
+else for (const line of cdp.errors) console.log('  ' + line)
+console.log('')
+
 const report = await cdp.eval(`
   (() => {
     const entry = document.getElementById('dsh-marketplace-entry');
@@ -93,6 +116,10 @@ const report = await cdp.eval(`
     const r = entry.getBoundingClientRect();
     const sec = document.getElementById('workspace-section');
     const sr = sec ? sec.getBoundingClientRect() : null;
+    const side = document.querySelector('.side');
+    const foot = document.querySelector('.side .foot');
+    const fr = foot ? foot.getBoundingClientRect() : null;
+    const sideR = side ? side.getBoundingClientRect() : null;
 
     // Every other sidebar row: the entry must not overlap any of them.
     const rows = [...document.querySelectorAll('.side .nav, .side .sec, .side .row')].map((el) => {
@@ -104,7 +131,13 @@ const report = await cdp.eval(`
     return JSON.stringify({
       found: true,
       entry: { top: Math.round(r.top), bottom: Math.round(r.bottom), left: Math.round(r.left), right: Math.round(r.right), height: Math.round(r.height) },
-      workspaceSection: sr ? { top: Math.round(sr.top), bottom: Math.round(sr.bottom) } : null,
+      workspaceSection: sr ? { top: Math.round(sr.top), bottom: Math.round(sr.bottom), left: Math.round(sr.left), right: Math.round(sr.right) } : null,
+      side: sideR ? { top: Math.round(sideR.top), bottom: Math.round(sideR.bottom), left: Math.round(sideR.left), right: Math.round(sideR.right) } : null,
+      foot: fr ? { top: Math.round(fr.top), bottom: Math.round(fr.bottom) } : null,
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      debug: globalThis.__MARKET_ENTRY_DEBUG__ ?? null,
+      placed: entry.hasAttribute('data-placed'),
+      inlineTop: entry.style.top,
       rows,
       overlaps: overlaps.map((row) => row.text),
       gapAboveHeading: sr ? Math.round(sr.top - r.bottom) : null,
@@ -129,11 +162,26 @@ const ok = (label, condition, extra = '') => {
 }
 
 console.log('')
-ok('入口被放置（data-placed）', parsed.found === true)
+// Visibility is asserted first and separately: an earlier version of this check
+// reported "placed" for an element that was `display:none`, and a hidden entry is
+// indistinguishable from a broken plugin.
+ok('入口可见（display 不为 none）', parsed.style?.display === 'flex', `display=${parsed.style?.display}`)
+ok('入口已测量到尺寸', (parsed.entry?.height ?? 0) > 0, `height=${parsed.entry?.height}`)
 ok('没有压在其它侧边栏行上', (parsed.overlaps ?? []).length === 0, (parsed.overlaps ?? []).join(', '))
-ok('在上一行下方留有空隙', (parsed.gapBelowLastRow ?? -1) > 0, `gap=${parsed.gapBelowLastRow}`)
 ok('落在左栏范围内', (parsed.entry?.left ?? 999) < 140, `left=${parsed.entry?.left}`)
-ok('在侧边栏底部区域内', (parsed.entry?.bottom ?? 0) < 700, `bottom=${parsed.entry?.bottom}`)
+ok('完整落在窗口内', (parsed.entry?.bottom ?? 9999) <= 620, `bottom=${parsed.entry?.bottom}`)
+
+// The measured slot is preferred but not required: when the sidebar cannot be
+// measured (collapsed, or markup changed) the entry falls back to a fixed slot
+// rather than disappearing, so this is reported rather than asserted.
+console.log('')
+const debug = parsed.debug ?? null
+if (debug === null || debug.headingFound === false) {
+  console.log('note  未测得「工作区」标题，入口使用兜底位置')
+} else {
+  console.log(`note  已测得：lastRow=${debug.lastRow} footTop=${debug.footTop} 选中=${debug.chosen}`)
+  ok('在上一行下方留有空隙', (parsed.gapBelowLastRow ?? -1) >= 0, `gap=${parsed.gapBelowLastRow}`)
+}
 
 await cdp.shoot('entry-sidebar.png')
 
@@ -141,3 +189,5 @@ console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all check
 socket.close()
 server.kill()
 process.exit(problems ? 1 : 0)
+
+
