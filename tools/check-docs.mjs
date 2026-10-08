@@ -106,6 +106,21 @@ for (const [label, condition] of claims) ok(label, condition)
   )
   ok('分发文档写明了与市场制品格式不同', guide.includes('与市场上卖的插件不是一个格式'))
   ok('分发文档写明了 dsh plugin add 这一条命令', guide.includes('dsh plugin --profile'))
+  /**
+   * The guide must state which edits need a repack and which do not.
+   *
+   * I got this wrong in conversation — I said a console change needs a repack, when the
+   * console is served by the service from its own `web/` directory. The guide is where
+   * that correction has to live, or the next person repeats it.
+   */
+  ok('分发文档给出了「哪些改动要重打包」的对照表', guide.includes('哪些改动要重打包'))
+  ok('分发文档写明改控制台不需要重打包', guide.includes('改控制台要重打包') && guide.includes('不需要'))
+
+  // And the packer must keep the console out of the client package.
+  ok(
+    '打包工具排除了 web/console.*',
+    /EXCLUDE\s*=\s*new Set\(\['web\/console\.html',\s*'web\/console\.css'\]\)/.test(packer),
+  )
 }
 
 console.log(problems ? `\nRESULT: ${problems} problem(s)` : '\nRESULT: all checks passed')

@@ -41,6 +41,25 @@ const ROOT = resolve(HERE, '..')
 const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
 const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
 
+/**
+ * Console files stay OUT of the client package.
+ *
+ * The console is the SERVICE's page: `server/lib/http.js` reads it from its own `web/`
+ * directory and serves it at `/console`. The client plugin never reads it — its asset
+ * whitelist (`PAGE_ASSETS` in `lib/plugin.js`) deliberately omits both files, and a test
+ * holds that line by asserting `console.css` 404s through the plugin's route.
+ *
+ * Verified with `tools/probe-console-source.mjs`: a marker written into a copy of the
+ * service tree's `console.html` is returned verbatim by that service's `/console`. So
+ * editing the console needs a SERVICE restart, never a plugin repack.
+ *
+ * Shipping a copy anyway would be dead weight with a nasty failure mode: deploy the
+ * service from inside an installed package and it serves a FROZEN console snapshot that
+ * no repo edit reaches. This is also why I once told the user that a console change
+ * required repacking — the copy made that look plausible. It was wrong.
+ */
+const EXCLUDE = new Set(['web/console.html', 'web/console.css'])
+
 const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 const out = resolve(process.argv[2] ?? join(ROOT, 'dist', `${pkg.name}-${pkg.version}.tgz`))
 
@@ -55,10 +74,18 @@ try {
     try { st = statSync(from) } catch { continue }
     const to = join(inner, item)
     if (st.isDirectory()) {
-      // `filter` runs per entry; dropping by basename keeps `node_modules` out at any
-      // depth without walking the tree twice.
-      cpSync(from, to, { recursive: true, filter: (src) => !SKIP.has(src.split(/[\\/]/).pop()) })
+      // `filter` runs per entry; dropping by relative path keeps `node_modules` and the
+      // console files out at any depth without walking the tree twice.
+      cpSync(from, to, {
+        recursive: true,
+        filter: (src) => {
+          const rel = src.slice(ROOT.length + 1).replace(/[\\/]/g, '/')
+          if (SKIP.has(rel.split('/').pop())) return false
+          return !EXCLUDE.has(rel)
+        },
+      })
     } else {
+      if (EXCLUDE.has(item)) continue
       mkdirSync(dirname(to), { recursive: true })
       copyFileSync(from, to)
     }
@@ -80,6 +107,11 @@ try {
   if (atRoot.length > 0) {
     throw new Error(`staging tree has entries outside package/: ${atRoot.join(', ')}`)
   }
+  // A silent exclusion list is how a file goes missing for months. Assert instead.
+  const leaked = entries.filter((entry) => EXCLUDE.has(entry.replace(/^package\//, '')))
+  if (leaked.length > 0) {
+    throw new Error(`excluded files leaked into the archive: ${leaked.join(', ')}`)
+  }
 
   const archive = packTarGz(stage, entries)
   mkdirSync(dirname(out), { recursive: true })
@@ -87,6 +119,7 @@ try {
 
   console.log(`${pkg.name}@${pkg.version}`)
   console.log(`  文件      ${entries.length} 个（全部在 package/ 下）`)
+  console.log(`  已排除    ${[...EXCLUDE].join('、')}（服务端的页面，本机插件不读）`)
   console.log(`  归档      ${out}`)
   console.log(`  大小      ${archive.length} B`)
   console.log('')
