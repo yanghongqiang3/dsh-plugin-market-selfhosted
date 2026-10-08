@@ -12,12 +12,16 @@ DSH 内部插件市场，由**两部分**组成：
 > "管理员手动添加用户"这个需求根本无法成立。所以权威在服务端，本机只负责落盘。
 
 **应用内入口（原生）**：DSH 左侧栏底部的「内部插件市场」按钮，注册在官方插槽
-`sidebar.footer.action`（设置按钮旁边），同时在 `sidebar.panellist`（「插件」那一组）有一个图标。
-点击**在系统浏览器中打开** `/market`，DSH 主界面不受影响。
+`sidebar.footer.action`（设置按钮旁边）。点击**在系统浏览器中打开** `/market`，DSH 主界面不受影响。
 也可以直接在浏览器访问 `http://127.0.0.1:<DSH 端口>/market`。
 
 它是**真正的客户端插件**（`lib/client.js` + `package.json` 的 `dsh.client`），不是注入的 DOM，
-所以侧边栏折叠成 56px 时会自动变成图标、跟随主题 token、跟随 locale——这些注入方案都做不到。
+所以侧边栏折叠成 56px 时会自动变成图标、跟随主题 token——这些注入方案都做不到。
+
+> **只注册一个座位，这是有意的。** `sidebar.panellist` 看起来更"原生"（它的行紧挨着「插件」），
+> 但那是一组**面板选择器**：owner 为每个已注册的主面板渲染一行，点击时调用
+> `layout.selectPanel(id)`，而**没有面板的 id 会抛错**。只注册图标不注册面板，就会得到一个
+> 看得见、点不动的行——比没有入口更糟。`verify-install.mjs` 现在会拦住这种写法。
 
 ---
 
@@ -177,7 +181,7 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 | 本地再校验一遍 sha256 | 不保存账号、组、规则 |
 | 解包并写入本机 profile | 不保存插件目录 |
 | 写 `dsh.profile.bundles` 或 profile patch 层 | 不执行安装脚本 |
-| 注册客户端插槽入口（`sidebar.footer.action` / `sidebar.panellist`） | 不注入 DOM、不测量壳的布局 |
+| 注册客户端插槽入口（`sidebar.footer.action`） | 不注入 DOM、不测量壳的布局、不注册无面板的面板行 |
 
 本机接口：
 

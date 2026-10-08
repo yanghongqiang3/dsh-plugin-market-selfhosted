@@ -225,6 +225,27 @@ const pluginSource = fs.readFileSync(path.join(dir, 'lib', 'plugin.js'), 'utf8')
         ok('client bundle styles use theme tokens only')
       }
 
+      // `sidebar.panellist` is a PANEL SELECTOR, not a free icon seat: its owner calls
+      // `layout.selectPanel(id)` on click, and that throws for an id with no panel
+      // behind it. Registering there without shipping a panel produced a row that was
+      // visible and did nothing — worse than no entry, because it looks available.
+      //
+      // Comments are stripped first: an earlier version of this check matched the
+      // explanatory comment above and failed on a file that was actually correct.
+      const code = source
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '')
+      if (code.includes('sidebar.panellist')) {
+        fail('client registers sidebar.panellist — those rows select a main panel, so without one it is a dead entry')
+      } else {
+        ok('client does not register a dead sidebar.panellist row')
+      }
+      if (code.includes("'sidebar.footer.action'")) {
+        ok('client registers the sidebar.footer.action seat')
+      } else {
+        fail('client does not register sidebar.footer.action — there would be no in-app entry')
+      }
+
       // The bare-name row must exist, and the bundle root must be a real plugin.
       const patch = fs.readFileSync(path.join(dir, 'cordis.patch.yml'), 'utf8')
       const bareRow = new RegExp(
