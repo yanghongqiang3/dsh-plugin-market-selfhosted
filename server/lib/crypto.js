@@ -33,13 +33,7 @@ export function newId() {
   return randomBytes(16).toString('hex')
 }
 
-/** Six digits, easy to read aloud. */
-export function newUserCode() {
-  return String(Math.floor(100000 + Math.random() * 899999))
-}
-
 export const SESSION_TTL_MS = 1000 * 60 * 60 * 2
 export const REFRESH_TTL_MS = 1000 * 60 * 60 * 24 * 7
-export const DEVICE_TTL_MS = 1000 * 60 * 5
 export const LOCKOUT_THRESHOLD = 5
 export const LOCKOUT_MS = 1000 * 60 * 15

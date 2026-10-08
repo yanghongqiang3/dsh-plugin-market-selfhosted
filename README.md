@@ -157,7 +157,6 @@ POST /dsh-market/auth/login                 登录 → 令牌
 POST /dsh-market/auth/logout
 GET  /dsh-market/auth/me
 POST /dsh-market/auth/password              首登必改时唯一放行的接口
-POST /dsh-market/auth/device/start|poll|approve|token   设备授权流（目前没有消费方，见下方注）
 GET  /dsh-market/catalog                    按调用者授权过滤，每条带 canInstall/reason
 GET  /dsh-market/detail
 GET  /dsh-market/download                   校验 SHA256 后才下发，响应头带 x-artifact-sha256
@@ -173,16 +172,20 @@ GET  /dsh-market/admin/users|groups|artifacts
 POST /dsh-market/admin/users|password|status|role|groups|membership|grants|artifacts/state
 ```
 
-> **设备授权流目前没有消费方，部署前应当处理。** 四个端点都在，但 CLI 与安装页都不用它；
-> 它当初是为「插件里不直接登录、回到网页授权」设计的，后来身份改走 DSH 账号绑定（§1.6），
-> 这条路就没人走了。它现在有两个真实问题：
+> **设备授权流已删除。** 它曾经存在（`auth/device/start|poll|approve|token`），但**没有
+> 消费方**：CLI 从不用它，安装页只调过 `approve`，而它当初要解决的那个问题——「插件里不直接
+> 登录、回到网页授权」——后来由 DSH 账号绑定解决了（§1.6）。
 >
-> - `device/start` **没有频率限制**，每次调用写一行库。服务端在可访问的地址上时，同网段
->   的人可以刷它。过期记录只在 `prune` 时清，不是自动的。
+> 删掉它同时消除了两个真实缺陷：
+>
+> - `device/start` **没有频率限制**，每次调用写一行库。服务端一旦部署到可访问的地址，
+>   同网段的人就能刷它；过期记录只在 `prune` 时清，不是自动的。
 > - 它返回的 `verificationUrl` 用 `?activate=<code>`，而页面读的是 `user_code`，
->   所以那个链接**打不开授权界面**。
+>   所以那个链接**打不开授权界面**——一个发出去就注定失败的链接。
 >
-> 因为**没有消费方**，最省事的处理是删掉它；要保留就得补限流并把参数名对齐。
+> 相关的一并移除：`device_auths` 表与索引、`DEVICE_TTL_MS`、`store` 的四个设备方法、
+> 页面里的激活视图与 `runActivate`。`dsh_bindings.device_id` 是**另一回事**
+> （DSH 设备指纹），未受影响。
 
 ### 0.7 三条不可动摇的规则
 
@@ -374,6 +377,32 @@ $node = "$env:USERPROFILE\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\nod
 | `E_MARKET_ALREADY_BOUND` | 这个市场账号已经绑了别的 DSH 账号 | 在安装页解绑后再试，或让管理员处理 |
 
 同一对重复绑定是**幂等成功**（`unchanged: true`），所以刷新页面不会报错。
+
+#### 绑定是「归属记录」，不是「使用限制」
+
+这个问题被问过一次，所以把实测结论写下来：**一个市场账号绑给了某个 DSH 账号之后，
+它仍然可以在任何时候、任何机器、任何别的 DSH 账号下登录。**
+
+实测（`tools/probe-binding-scope.mjs`，全部通过）：
+
+| 行为 | 结果 |
+|---|---|
+| alice 的市场账号绑到 `dsh-alice` | ✅ 成功 |
+| 再用同一个市场账号登录（携带的是**别的** DSH 账号） | ✅ **成功**，会话正常可用 |
+| 这次登录是否改变绑定 | ❌ 不改变，仍是 `dsh-alice` |
+| 能否用已绑定的市场账号去绑第二个 DSH 账号 | ❌ `409 E_MARKET_ALREADY_BOUND` |
+| 第二个 DSH 账号是否被偷偷占用 | ❌ 没有，仍空闲 |
+
+**为什么是这样**：登录只校验市场账号的密码，请求里根本不带 DSH 身份。绑定记录的是
+「谁拥有谁」，它拦住的是**新建绑定**（一对一），不是**使用**。
+
+**这意味着什么**：绑定的作用是让"这个市场账号属于这台机器的 DSH 账号"这件事有据可查，
+并防止一个名额被两个身份反复认领。它**不是**"把市场账号钉死在这台机器上"。
+知道密码的人在哪都能用——和普通账号密码体系一样。
+
+**如果目标是钉死**，那就得换个设计：登录请求要带上本机 DSH 身份，服务端拒绝与绑定不符的
+登录。需要说清的是，那种检查**只防误用、不防攻击**——客户端可以谎报身份，直接对服务端发请求
+就能绕过。真正的强制只能靠密码/令牌本身。
 
 #### 手动绑定，不自动
 

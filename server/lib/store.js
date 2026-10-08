@@ -6,7 +6,6 @@
  * the HTTP layer is the only caller of either.
  */
 import {
-  DEVICE_TTL_MS,
   LOCKOUT_MS,
   LOCKOUT_THRESHOLD,
   REFRESH_TTL_MS,
@@ -15,7 +14,6 @@ import {
   hashToken,
   newId,
   newToken,
-  newUserCode,
   verifyPassword,
 } from './crypto.js'
 import { rowToUser } from './db.js'
@@ -286,72 +284,11 @@ export class Store {
     return Number(result.changes)
   }
 
-  /** Housekeeping: drop expired sessions and stale device codes. */
+  /** Housekeeping: drop expired sessions. */
   prune() {
     const now = Date.now()
     const sessions = this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now)
-    const devices = this.db.prepare('DELETE FROM device_auths WHERE expires_at < ?').run(now)
-    return { sessions: Number(sessions.changes), deviceAuths: Number(devices.changes) }
-  }
-
-  // ------------------------------------------------------------ device auth
-
-  startDeviceAuth(deviceName = 'unknown device') {
-    const deviceCode = newToken()
-    const deviceSecret = newToken()
-    const userCode = newUserCode()
-    const now = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO device_auths (device_code, device_secret_hash, user_code, device_name,
-                                   status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, 'pending', ?, ?)`,
-      )
-      .run(deviceCode, hashToken(deviceSecret), userCode, deviceName, now, now + DEVICE_TTL_MS)
-    this.audit('device.start', { userCode, deviceName })
-    return { deviceCode, deviceSecret, userCode, expiresIn: DEVICE_TTL_MS / 1000 }
-  }
-
-  pollDeviceAuth(deviceCode) {
-    const row = this.db.prepare('SELECT * FROM device_auths WHERE device_code = ?').get(deviceCode)
-    if (!row) return { status: 'unknown' }
-    if (row.status === 'pending' && row.expires_at < Date.now()) return { status: 'expired' }
-    return { status: row.status, deviceName: row.device_name }
-  }
-
-  approveDeviceAuth(userCode, user) {
-    const row = this.db.prepare('SELECT * FROM device_auths WHERE user_code = ?').get(userCode)
-    if (!row) return { ok: false, code: 'E_UNKNOWN_CODE' }
-    if (row.expires_at < Date.now() && row.status === 'pending') {
-      this.db.prepare("UPDATE device_auths SET status = 'expired' WHERE user_code = ?").run(userCode)
-      return { ok: false, code: 'E_EXPIRED' }
-    }
-    if (row.status !== 'pending') return { ok: false, code: 'E_ALREADY_RESOLVED', status: row.status }
-    this.db
-      .prepare("UPDATE device_auths SET status = 'authorized', user_id = ?, authorized_at = ? WHERE user_code = ?")
-      .run(user.id, Date.now(), userCode)
-    this.audit('device.approve', { userCode, deviceName: row.device_name }, user.username)
-    return { ok: true, status: 'authorized' }
-  }
-
-  /** Exchange an authorized device code for a session; one-shot. */
-  redeemDeviceAuth(deviceCode, deviceSecret, context = {}) {
-    const row = this.db.prepare('SELECT * FROM device_auths WHERE device_code = ?').get(deviceCode)
-    if (!row) return { ok: false, code: 'E_UNKNOWN_CODE' }
-    if (row.status === 'pending') return { ok: false, code: 'E_PENDING' }
-    if (row.status === 'consumed') return { ok: false, code: 'E_CONSUMED' }
-    if (row.status !== 'authorized') return { ok: false, code: 'E_EXPIRED' }
-    if (row.device_secret_hash !== hashToken(deviceSecret)) {
-      this.audit('device.redeem', { userCode: row.user_code, result: 'bad-secret' })
-      return { ok: false, code: 'E_BAD_SECRET' }
-    }
-    const user = this.findUserById(row.user_id)
-    if (!user || user.status !== 'active') return { ok: false, code: 'E_USER_INACTIVE' }
-    this.db.prepare('UPDATE device_auths SET status = ?, consumed_at = ? WHERE device_code = ?')
-      .run('consumed', Date.now(), deviceCode)
-    const issued = this.issueSession(user, context)
-    this.audit('device.redeem', { userCode: row.user_code, result: 'ok' }, user.username)
-    return { ok: true, ...issued, username: user.username }
+    return { sessions: Number(sessions.changes) }
   }
 
   // -------------------------------------------------------------- auth check

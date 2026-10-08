@@ -189,29 +189,6 @@
   }
 
   /**
-   * Device-authorization flow, shared because it belongs to the platform rather than
-   * to either surface: it signs THIS MACHINE in, so the DSH host plugin can act
-   * without a human pasting credentials into a page.
-   */
-  function runActivate(userCode) {
-    const code = $('act-code')
-    const err = $('act-err')
-    err.textContent = ''
-    if (!userCode) { err.textContent = '请输入设备码'; return }
-    service('/dsh-market/auth/device/approve', { method: 'POST', body: { userCode } })
-      .then((result) => {
-        if (!result.ok) {
-          err.textContent = result.body?.detail || result.body?.code || `激活失败（HTTP ${result.status}）`
-          return
-        }
-        code.value = ''
-        status('设备已激活，可以回到本机继续安装。')
-        show('login')
-      })
-      .catch(() => { /* request() already switched views */ })
-  }
-
-  /**
    * Record the signed-in user and derive the admin flag.
    *
    * The service reports `role: 'admin' | 'member'` — there is no boolean `isAdmin`
@@ -224,17 +201,6 @@
     state.isAdmin = state.me?.role === 'admin'
     setWho(state.me?.displayName ?? state.me?.username ?? '')
     return state.me
-  }
-
-  async function startActivate() {
-    const pending = global.__marketPendingActivation
-    if (!pending) return
-    $('act-code').value = pending
-    try {
-      const result = await service('/dsh-market/auth/me')
-      setMe(result.body?.user)
-      if (result.ok) show('activate')
-    } catch { /* not signed in: login first, activation stays reachable from the link */ }
   }
 
   // --------------------------------------------------------------- form helpers
@@ -339,14 +305,6 @@
       return state
     }
 
-    const pending = new global.URLSearchParams(global.location.search).get('user_code')
-    if (pending) {
-      global.__marketPendingActivation = pending
-      show('login')
-      await startActivate()
-      return state
-    }
-
     if (!token.get()) {
       show('login')
       return state
@@ -381,7 +339,6 @@
     doLogin,
     doChangePassword,
     doLogout,
-    runActivate,
     init: boot,
     onAuthenticated,
   }

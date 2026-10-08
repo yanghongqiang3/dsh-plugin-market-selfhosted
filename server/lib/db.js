@@ -83,19 +83,6 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
 
-    CREATE TABLE IF NOT EXISTS device_auths (
-      device_code        TEXT PRIMARY KEY,
-      device_secret_hash TEXT NOT NULL,
-      user_code          TEXT NOT NULL,
-      device_name        TEXT NOT NULL,
-      status             TEXT NOT NULL DEFAULT 'pending',
-      user_id            TEXT REFERENCES users(id) ON DELETE SET NULL,
-      created_at         INTEGER NOT NULL,
-      expires_at         INTEGER NOT NULL,
-      authorized_at      INTEGER,
-      consumed_at        INTEGER
-    );
-    CREATE INDEX IF NOT EXISTS device_user_code ON device_auths(user_code);
 
     /**
      * DSH account <-> market account, strictly one to one.

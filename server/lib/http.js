@@ -214,49 +214,6 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     json(res, 200, { ok: true })
   }, { auth: 'none' })
 
-  // -------------------------------------------------------------- device flow
-
-  route('POST', '/dsh-market/auth/device/start', async (req, res) => {
-    const body = await readBody(req)
-    const started = store.startDeviceAuth(body?.deviceName ?? 'unknown device')
-    json(res, 200, {
-      ok: true,
-      deviceCode: started.deviceCode,
-      deviceSecret: started.deviceSecret,
-      userCode: started.userCode,
-      verificationUrl: `/market?activate=${started.userCode}`,
-      expiresIn: started.expiresIn,
-    })
-  }, { auth: 'none' })
-
-  route('POST', '/dsh-market/auth/device/poll', async (req, res) => {
-    const body = await readBody(req)
-    const state = store.pollDeviceAuth(body?.deviceCode)
-    json(res, 200, { ok: true, status: state.status, deviceName: state.deviceName ?? null })
-  }, { auth: 'none' })
-
-  route('POST', '/dsh-market/auth/device/approve', async (req, res, caller) => {
-    const body = await readBody(req)
-    const result = store.approveDeviceAuth(String(body?.userCode ?? ''), caller.user)
-    json(res, result.ok ? 200 : 400, result)
-  })
-
-  route('POST', '/dsh-market/auth/device/token', async (req, res) => {
-    const body = await readBody(req)
-    const result = store.redeemDeviceAuth(body?.deviceCode, body?.deviceSecret, clientInfo(req))
-    if (!result.ok) {
-      json(res, 400, { ok: false, code: result.code })
-      return
-    }
-    json(res, 200, {
-      ok: true,
-      token: result.token,
-      refresh: result.refresh,
-      expiresIn: result.expiresIn,
-      username: result.username,
-    })
-  }, { auth: 'none' })
-
   // -------------------------------------------------------------- marketplace
 
   route('GET', '/dsh-market/catalog', (req, res, caller) => {

@@ -537,7 +537,7 @@ switch (command) {
   case 'prune': {
     const { db, store } = open()
     const result = store.prune()
-    console.log(`已清理过期会话 ${result.sessions} 个、设备码 ${result.deviceAuths} 个`)
+    console.log(`已清理过期会话 ${result.sessions} 个`)
     db.close()
     break
   }

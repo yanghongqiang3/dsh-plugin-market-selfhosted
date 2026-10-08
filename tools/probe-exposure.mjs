@@ -29,7 +29,6 @@ const probes = [
   ['POST', '/dsh-market/admin/identity/unbind', {}],
   ['POST', '/dsh-market/publish', null],
   ['POST', '/dsh-market/auth/login', {}],
-  ['POST', '/dsh-market/auth/device/start', {}],
 ]
 
 console.log('无令牌请求的实际响应：')
@@ -46,8 +45,28 @@ for (const [method, path, body] of probes) {
   console.log(`  ${String(response.status).padEnd(4)} ${method.padEnd(5)} ${path.padEnd(46)} ${reachable ? '可访问' : '拒绝'}  ${text}`)
 }
 
+// Labelled like the other suites so the same runner can count them. `ok` here means
+// "the answer is known and expected", not "this route is safe to expose".
+console.log('')
+let expected = 0
+for (const [method, path] of probes) {
+  // Admin and publish routes MUST refuse an anonymous caller. Everything else is the
+  // public surface and is asserted to be public on purpose, so a change of surface is
+  // visible in the diff rather than discovered in production.
+  const mustRefuse = path.startsWith('/dsh-market/admin/') || path === '/dsh-market/publish'
+  const isOpen = open.some((line) => line.startsWith(`${method} ${path} `))
+  if (mustRefuse) {
+    if (isOpen) { console.log(`FAIL  无令牌不应能访问 ${method} ${path}`); expected += 1 }
+    else console.log(`ok    无令牌被拒 ${method} ${path}`)
+  } else {
+    console.log(`ok    公开路由（预期）${method} ${path}`)
+  }
+}
+
 console.log('')
 console.log(`真正无需令牌即可访问的: ${open.length} 条`)
 for (const line of open) console.log(`  ${line}`)
+console.log(expected ? `\nRESULT: ${expected} problem(s)` : '\nRESULT: all checks passed')
 
 app.server.close()
+process.exit(expected ? 1 : 0)

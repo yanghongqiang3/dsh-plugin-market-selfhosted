@@ -631,6 +631,49 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   fs.existsSync(path.join(dir, file)) ? ok(`service present: ${file}`) : fail(`service missing: ${file}`)
 }
 
+/**
+ * The device-authorization flow must stay gone.
+ *
+ * It was removed because it had no consumer and carried two real defects: an
+ * unauthenticated route that wrote a database row per call with no rate limit, and a
+ * `verificationUrl` using `?activate=` while the page read `user_code`, so the link it
+ * handed out could not open the approval screen.
+ *
+ * Deleting code is easy to undo by accident — a merge, a stale branch, a copy-paste
+ * from an old revision. Nothing else in the suite would notice, because the endpoints
+ * worked; they were simply unused and wrong. So the absence is asserted here.
+ */
+{
+  const serverFiles = ['server/lib/http.js', 'server/lib/store.js', 'server/lib/db.js', 'server/lib/crypto.js']
+  const traces = ['device_auths', 'startDeviceAuth', 'pollDeviceAuth', 'approveDeviceAuth', 'redeemDeviceAuth', 'DEVICE_TTL_MS', 'auth/device']
+  for (const file of serverFiles) {
+    const full = path.join(dir, file)
+    if (!fs.existsSync(full)) continue
+    const source = fs.readFileSync(full, 'utf8')
+    const found = traces.filter((needle) => source.includes(needle))
+    if (found.length === 0) ok(`${file} 不含设备授权流`)
+    else fail(`${file} 又出现了设备授权流：${found.join(', ')}`)
+  }
+  // `dsh_bindings.device_id` is the DSH device fingerprint and must SURVIVE: it shares
+  // the word "device" but has nothing to do with the flow just removed.
+  const storeSource = fs.existsSync(path.join(dir, 'server/lib/store.js'))
+    ? fs.readFileSync(path.join(dir, 'server/lib/store.js'), 'utf8')
+    : ''
+  storeSource.includes('device_id')
+    ? ok('dsh_bindings.device_id 保留（与设备授权流无关）')
+    : fail('dsh_bindings.device_id 被误删 —— 那是 DSH 设备指纹')
+  // And the removal must not have taken `prune`'s return value with it. It did once:
+  // the deleted line was `return { sessions: ..., deviceAuths: ... }`, so dropping only
+  // the second field was impossible without rewriting the line, and the whole `return`
+  // went. Plain string matching here — a regex with backslashes written through a tool
+  // boundary is its own source of silent damage.
+  const pruneStart = storeSource.indexOf('prune()')
+  const pruneBody = pruneStart < 0 ? '' : storeSource.slice(pruneStart, pruneStart + 260)
+  pruneBody.includes('return { sessions: Number(sessions.changes) }')
+    ? ok('prune() 仍返回会话计数')
+    : fail('prune() 的返回值在删除设备流时被带走了')
+}
+
 resolveSpec(PKG)
 resolveSpec(`${PKG}/plugin`)
 

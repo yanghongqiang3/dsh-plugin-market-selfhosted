@@ -283,45 +283,7 @@ const alice2 = await call('POST', '/dsh-market/auth/login', {
 const nonAdmin = await call('GET', '/dsh-market/admin/users', { token: alice2.body.token })
 ok('普通用户访问管理接口 -> 403 E_NOT_ADMIN', nonAdmin.status === 403 && nonAdmin.body.code === 'E_NOT_ADMIN', `${nonAdmin.status}/${nonAdmin.body?.code}`)
 
-// ---------------------------------------------------------------- 7. 设备码
-
-console.log('\n--- 设备授权码 ---')
-const start = await call('POST', '/dsh-market/auth/device/start', { body: { deviceName: 'DSH-Desktop' } })
-ok('start 返回三个码', Boolean(start.body.deviceCode && start.body.deviceSecret && start.body.userCode))
-const pollPending = await call('POST', '/dsh-market/auth/device/poll', { body: { deviceCode: start.body.deviceCode } })
-ok('未授权时为 pending', pollPending.body.status === 'pending')
-const approved = await call('POST', '/dsh-market/auth/device/approve', {
-  token: alice2.body.token,
-  body: { userCode: start.body.userCode },
-})
-ok('网页端授权', approved.status === 200 && approved.body.ok === true)
-const redeemed = await call('POST', '/dsh-market/auth/device/token', {
-  body: { deviceCode: start.body.deviceCode, deviceSecret: start.body.deviceSecret },
-})
-ok('换到设备令牌', redeemed.status === 200 && redeemed.body.username === 'alice')
-const reused = await call('POST', '/dsh-market/auth/device/token', {
-  body: { deviceCode: start.body.deviceCode, deviceSecret: start.body.deviceSecret },
-})
-ok('二次兑换被拒', reused.status === 400 && reused.body.code === 'E_CONSUMED')
-
-// A fresh code, approved, then redeemed with the WRONG secret: must be refused
-// and must stay unconsumed so the legitimate holder can still redeem it.
-const second = await call('POST', '/dsh-market/auth/device/start', { body: { deviceName: 'DSH-Desktop-2' } })
-await call('POST', '/dsh-market/auth/device/approve', {
-  token: alice2.body.token,
-  body: { userCode: second.body.userCode },
-})
-const badSecret = await call('POST', '/dsh-market/auth/device/token', {
-  body: { deviceCode: second.body.deviceCode, deviceSecret: 'wrong-secret' },
-})
-ok('错误 secret 被拒（E_BAD_SECRET）', badSecret.status === 400 && badSecret.body.code === 'E_BAD_SECRET', String(badSecret.body?.code))
-
-const stillRedeemable = await call('POST', '/dsh-market/auth/device/token', {
-  body: { deviceCode: second.body.deviceCode, deviceSecret: second.body.deviceSecret },
-})
-ok('错误尝试未消费该设备码', stillRedeemable.status === 200 && stillRedeemable.body.username === 'alice', String(stillRedeemable.body?.code))
-
-// ------------------------------------------------------------------ 8. 审计
+// ------------------------------------------------------------- 7. 审计与清理
 
 console.log('\n--- 审计与清理 ---')
 const audit = store.recentAudit(200)
