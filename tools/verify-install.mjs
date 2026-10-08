@@ -892,6 +892,26 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   marketSource.includes('/dsh-market/link')
     ? ok('安装页把密钥交给宿主插件（而不是留给页面）')
     : fail('安装页没有把密钥交给插件')
+  /**
+   * Logout must disarm auto-login on THIS device.
+   *
+   * It did not, so 退出 was a lie: the session and the refresh token were cleared, but the
+   * plugin's device secret stayed, and the very next visit asked the plugin for a session
+   * and silently signed the user back in. The binding is deliberately left alone — this
+   * only stops auto-login here.
+   */
+  const logoutBlock = /onLogout:\s*\(\)\s*=>\s*\{[\s\S]*?\n  \},/.exec(marketSource)?.[0] ?? ''
+  if (logoutBlock === '') {
+    fail('could not find the install page onLogout block')
+  } else if (logoutBlock.includes('dropLinkSecret')) {
+    ok('退出登录会清掉本机密钥（退出之后不会被自动登回来）')
+  } else {
+    fail('退出登录没有清本机密钥 —— 下次打开会自动登录回去，「退出」形同虚设')
+  }
+  // ...and there must be a way back that does not require unbinding first.
+  marketSource.includes('在此设备启用自动登录')
+    ? ok('绑定行提供「在此设备启用自动登录」（不必先解绑）')
+    : fail('关闭自动登录后没有就地重新启用的入口')
 }
 
 resolveSpec(PKG)

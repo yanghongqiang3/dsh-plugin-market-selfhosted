@@ -175,10 +175,40 @@ const afterClear = await invoke('/dsh-market/session', { method: 'GET' })
 ok('清除后不再自动登录', afterClear.body?.session === null && afterClear.body?.reason === 'E_NO_LOCAL_SECRET', JSON.stringify(afterClear.body))
 
 console.log('')
+console.log('--- 退出登录必须关掉自动登录（否则「退出」是个谎话）---')
+/**
+ * The question this answers: 「在安装页点了退出，下次打开会自动登录吗？」
+ *
+ * It DID. The page cleared the session and the refresh token but not the plugin's device
+ * secret, so the next visit asked the plugin for a session and silently signed back in.
+ * The page now clears the secret on logout; this pins the MECHANISM (a cleared secret
+ * cannot be exchanged) and the preflight asserts the page actually does it.
+ */
+await invoke('/dsh-market/link', { body: { dshUserId: 'dsh-alice-1', secret: fresh.body.secret, marketUsername: 'alice' } })
+const armed = await invoke('/dsh-market/session', { method: 'GET' })
+ok('清掉之前：密钥可用，会自动登录', armed.body?.session?.token !== undefined && armed.body?.hasSecret === true)
+await invoke('/dsh-market/link', { body: { clear: true } })
+const disarmed = await invoke('/dsh-market/session', { method: 'GET' })
+ok('清掉之后：不再自动登录', disarmed.body?.session === null && disarmed.body?.reason === 'E_NO_LOCAL_SECRET')
+ok('  且如实报告本机没有密钥（页面据此提示可重新启用）', disarmed.body?.hasSecret === false)
+// Clearing the secret is NOT unbinding: the slot is unchanged.
+const stillBound = await call('GET', '/dsh-market/identity/lookup?dshUserId=dsh-alice-1')
+ok('  绑定本身不受影响（只是本机不再自动登录）', stillBound.body?.bound === true, JSON.stringify(stillBound.body))
+// And it can be armed again without unbinding first — the bind is idempotent and mints a
+// fresh secret, which is what the binding row's 「在此设备启用自动登录」 button calls.
+const rearm = await call('POST', '/dsh-market/identity/bind', { dshUserId: 'dsh-alice-1', dshName: 'Alice' }, alice)
+ok('  可以就地重新启用（不必先解绑）', rearm.status === 200 && rearm.body?.unchanged === true && typeof rearm.body?.secret === 'string')
+await invoke('/dsh-market/link', { body: { dshUserId: 'dsh-alice-1', secret: rearm.body.secret } })
+const rearmed = await invoke('/dsh-market/session', { method: 'GET' })
+ok('  重新启用后又能自动登录', rearmed.body?.session?.token !== undefined, String(rearmed.body?.reason ?? ''))
+
+console.log('')
 console.log('结论：')
 console.log('  · 「自动登录」= DSH 账号已绑定 + 本机持有绑定密钥；账号 ID 本身换不到会话。')
 console.log('  · 密钥只在绑定时下发一次，读取接口不返回它，重绑会轮换、解绑即失效。')
 console.log('  · 密钥由宿主插件保管，页面只向插件要会话；插件拒绝一切外部 Origin 的请求。')
+console.log('  · 退出登录会清掉本机密钥，所以退出之后不会再被自动登回来；')
+console.log('    绑定不受影响，且可就地重新启用。')
 
 app.server.close()
 app.db.close()

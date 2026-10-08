@@ -97,6 +97,13 @@ const installedMap = new Map()
 let dshIdentity = { source: 'none', userId: null, name: null, deviceId: null, reason: null }
 /** The binding the service reports for the signed-in market account. */
 let binding = null
+/**
+ * Whether THIS device holds a binding secret, i.e. whether auto-login is armed.
+ *
+ * Tracked separately from `binding` because the two can disagree: logging out clears the
+ * secret but not the binding, and the row has to offer a way to arm it again.
+ */
+let linkStored = false
 
 /**
  * Describe the DSH account this machine carries — and ONLY that.
@@ -437,6 +444,8 @@ async function tryAutoLogin() {
   } catch {
     return false
   }
+  // Remembered so the binding row can offer to turn auto-login back ON after a logout.
+  linkStored = result?.body?.hasSecret === true
   const session = result?.body?.session
   if (!result?.ok || !session?.token) return false
   S.token.set(session.token)
@@ -484,6 +493,31 @@ async function renderBinding() {
     // administrator hit the same wall: the button was disabled for everyone.
     action.textContent = '解绑'
     action.addEventListener('click', doUnbind)
+
+    /**
+     * After a logout this device no longer holds a secret, so auto-login is off while the
+     * binding stands. Offer the way back explicitly rather than making the user unbind and
+     * rebind to get it — and rather than re-arming it silently, which is the automatic
+     * behaviour that was deliberately removed.
+     */
+    if (!linkStored) {
+      line.textContent += '\n此设备已关闭自动登录（退出登录会关闭它）。'
+      const arm = document.createElement('button')
+      arm.className = 'btn'
+      arm.textContent = '在此设备启用自动登录'
+      arm.addEventListener('click', async () => {
+        arm.disabled = true
+        arm.textContent = '启用中…'
+        const result = await bindIdentity()
+        if (!result.ok) {
+          reportBindFailure(result)
+        } else {
+          status('已在本设备启用自动登录。下次打开安装页将直接进入。')
+        }
+        await renderBinding()
+      })
+      box.appendChild(arm)
+    }
     return
   }
 
@@ -642,6 +676,18 @@ S.init({
     catalog = null
     $('grid').textContent = ''
     $('note').textContent = ''
+    /**
+     * Drop this device's binding secret.
+     *
+     * Without this the 退出 button was a lie: the session and the refresh token were
+     * cleared, but the secret stayed — so the very next visit asked the plugin for a
+     * session and silently signed the user back in.
+     *
+     * The BINDING is untouched. This only disarms auto-login on this machine, and the
+     * binding row offers to arm it again.
+     */
+    linkStored = false
+    void dropLinkSecret()
   },
 })
 </script>
