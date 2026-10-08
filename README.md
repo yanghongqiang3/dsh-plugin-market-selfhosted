@@ -11,6 +11,10 @@ DSH 内部插件市场，由**两部分**组成：
 > 那样管理员建的号别人登不上、改的规则只对自己生效、审计散在各人机器上——
 > "管理员手动添加用户"这个需求根本无法成立。所以权威在服务端，本机只负责落盘。
 
+**应用内入口**：DSH 窗口**底部有一条满宽的蓝色横条**「内部插件市场 · 点击打开」，点击进入 `/market`。
+它通过 `webserver/index-inject` 注入（Electron 桌面壳唯一有效的注入通道，机理见 §4.1）。
+也可以直接在浏览器打开 `http://127.0.0.1:<DSH 端口>/market`。
+
 ---
 
 ## 0. 市场服务端
@@ -155,7 +159,8 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 
 设为 DSH 的环境变量后重启 DSH。可选：`MARKET_SERVICE_TIMEOUT_MS`（默认 30000）、`DSH_PROFILE_DIR`。
 
-然后访问 `http://127.0.0.1:<DSH 端口>/market`。
+然后重启 DSH。**窗口底部会出现一条蓝色的「内部插件市场 · 点击打开」横条**；也可以直接在
+浏览器访问 `http://127.0.0.1:<DSH 端口>/market`。
 
 ### 1.2 它做什么、不做什么
 
@@ -165,6 +170,7 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 | 本地再校验一遍 sha256 | 不保存账号、组、规则 |
 | 解包并写入本机 profile | 不保存插件目录 |
 | 写 `dsh.profile.bundles` 或 profile patch 层 | 不执行安装脚本 |
+| 往壳里注入一个入口（`webserver/index-inject`） | 不注册任何客户端插槽 |
 
 本机接口：
 
@@ -242,22 +248,58 @@ tools/                        测试与本地夹具
 
 ## 3. 已知限制
 
-- **应用内没有可见入口**：市场页要在浏览器打开 `http://127.0.0.1:<DSH 端口>/market`。
-  壳页面注入（`tapIndex`、`index-inject` 行）在 Electron 桌面壳下不生效，见 §4.1。
-- 发布只能通过服务端 CLI（`publish`），页面里没有上传入口。
+- 发布只能通过 CLI（`publish`），页面里还没有上传入口。
 - 已装状态来自本机 profile 文件，不是服务端上报的清单。
+- 服务端是前台进程，需要靠 `start-market.bat` 手动拉起；没有做成开机自启。
 
 ## 4. 排错
 
-### 4.1 为什么壳页面注入在 Electron 下无效
+### 4.1 壳页面注入：两个通道，只有一个在 Electron 下有效
 
-`@deepseek-ai/dsh-host-webserver` 的注释是决定性的：
+**这是本项目最容易搞错的地方**，我在这里返工过两次，所以写清楚。
 
-> *"It knows no harness concepts and serves no files; the composing application owns dist
-> serving. **Electron uses file:// plus IPC instead**, and this package never prints the URL."*
+桌面壳**不通过 HTTP 提供它的 index**。Electron 的 `protocol.handle('dsh-app', …)` 是这样分派的：
 
-`register`（路由）对 Electron 有效，但 **index 管线**（`tapIndex` / `webserver/index-inject` 行，
-两者都由 `renderIndex` → `applyIndexTaps` 消费）只作用于 HTTP 提供的 index.html。
+```js
+if (url.hostname === "shell") return serveWebDocument(request, join(app.getAppPath(), "renderer"));
+if (url.hostname === "app") {
+  if (url.pathname === "/" || url.pathname === "/index.html" || url.pathname.startsWith("/assets/") …)
+    return serveWebDocument(request, join(resources.dsh, "node_modules", "@deepseek-ai", "dsh-web-frontend", "dist"));
+  …
+  return forwardWebRequest(request, hostUrl, hostCookie);   // 只有非 index 才转发给宿主
+}
+```
+
+`dsh-app://app/` 直接从磁盘读 `dsh-web-frontend/dist/index.html`。所以：
+
+| 通道 | HTTP 壳（`dsh web`） | Electron 桌面壳 |
+|---|---|---|
+| `webServer.register`（路由） | ✅ | ✅（非 index 路径会转发给宿主） |
+| `webServer.tapIndex`（`renderIndex` → `applyIndexTaps`） | ✅ | ❌ 从磁盘读，根本不经过 `renderIndex` |
+| **`webserver/index-inject` 行** | ✅ | ✅ **唯一的注入通道** |
+
+Electron 下注入行的路径是 **IPC**，不是 HTML 改写：
+
+```
+dsh-desktop-host: process.send({ type:'ready', injections: ctx.webServer.collectIndexInjections() })
+electron main:    ipcMain.handle(DESKTOP_IPC.boot, () => ({ injections, streamBaseUrl }))
+renderer:         for (const row of injections) switch (row.kind) {
+                    case 'style': head.append(<style>{row.text})
+                    case 'html':  (row.placement==='head'?head:body).insertAdjacentHTML('beforeend', row.html)
+                    …
+                    default: throw new Error('web boot: unknown index injection row …')
+                  }
+```
+
+**两个后果**：
+
+1. 行必须注册**早于** `collectIndexInjections()`（宿主 report ready 时只收集一次）。所以插件要在
+   `webServer` 一出现就注册监听，不能等到别的事情做完。
+2. **未知的 `kind` 会让整个 web boot 抛异常**。合法 kind 只有：
+   `global` / `script` / `script-src` / `script-preload` / `style` / `html`。
+   两种壳接受的 kind 完全一样。
+
+`tools/test-shell-entry.mjs` 专门守这条：它断言行既存在、schema 正确，又都在合法 kind 列表里。
 
 ### 4.2 接口前缀为什么不能是 `/api`
 

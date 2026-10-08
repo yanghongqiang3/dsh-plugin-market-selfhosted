@@ -1,9 +1,9 @@
 // Run the marketplace host plugin outside DSH, over a real HTTP server.
 //
-// Why: `pwsh`-free, DSH-free verification of the routes and the page. It stubs
-// the two services the plugin touches (webServer + ctx.effect) and maps the
-// plugin's `{ kind, path, handler }` routes onto plain node:http, which is the
-// same shape WebRoute declares.
+// Why: fast, DSH-free verification of the routes, the page, and — importantly —
+// the two shell-entry channels. It stubs the services the plugin touches and maps
+// its `{ kind, path, handler }` routes onto plain node:http, the same shape
+// WebRoute declares.
 //
 //   node tools/serve-local.mjs [port] [artifactRoot]
 import http from 'node:http'
@@ -17,6 +17,9 @@ if (artifactRoot) process.env.MARKET_ARTIFACT_ROOT = artifactRoot
 
 const routes = []
 const indexTaps = []
+/** Listeners for the real `webserver/index-inject` event. */
+const indexInjectListeners = []
+
 const webServer = {
   register(route) {
     if (route.kind !== 'exact' && route.kind !== 'prefix') {
@@ -28,13 +31,24 @@ const webServer = {
       if (index >= 0) routes.splice(index, 1)
     }
   },
-  // Mirrors the real carrier: tapIndex transforms the shell index on render.
+  // HTTP-served index path: the carrier applies taps during render.
   tapIndex(transform) {
     indexTaps.push(transform)
     return () => {
       const index = indexTaps.indexOf(transform)
       if (index >= 0) indexTaps.splice(index, 1)
     }
+  },
+  /**
+   * Mirrors @deepseek-ai/dsh-host-webserver: one mutable table per render, emitted
+   * to every listener in activation order. The desktop host calls this once and
+   * ships the result to the Electron renderer over IPC, so the rows must be
+   * shaped exactly as `renderRow` expects.
+   */
+  collectIndexInjections() {
+    const table = []
+    for (const listener of indexInjectListeners) listener(table)
+    return table
   },
 }
 
@@ -53,14 +67,35 @@ const ctx = {
     const dispose = fn()
     return typeof dispose === 'function' ? dispose : () => {}
   },
+  on: (event, listener) => {
+    if (event !== 'webserver/index-inject') return () => {}
+    indexInjectListeners.push(listener)
+    return () => {
+      const index = indexInjectListeners.indexOf(listener)
+      if (index >= 0) indexInjectListeners.splice(index, 1)
+    }
+  },
 }
 
 const mod = await import(pathToFileURL('E:/workspace/dsh/lib/plugin.js').href)
 mod.apply(ctx)
-console.log(`plugin applied; routes=${routes.length} indexTaps=${indexTaps.length}`)
+console.log(
+  `plugin applied; routes=${routes.length} indexTaps=${indexTaps.length} indexInjectListeners=${indexInjectListeners.length}`,
+)
+
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+
+  // Diagnostic endpoint: exactly the rows the desktop host would ship to the
+  // Electron renderer over IPC. This is the channel the desktop shell uses, so it
+  // is the one worth asserting on.
+  if (url.pathname === '/__shell-injections') {
+    const body = JSON.stringify({ rows: webServer.collectIndexInjections() }, null, 2)
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+    res.end(body)
+    return
+  }
 
   // The shell index: serve the stub through every registered tap.
   if (url.pathname === '/' || url.pathname === '/index.html') {
