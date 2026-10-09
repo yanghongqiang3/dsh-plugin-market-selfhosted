@@ -1151,7 +1151,7 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource5.includes('MARKET_AUTO_RECALL')
     ? ok('  有开关可以关掉')
     : fail('  自动移除没有开关')
-  pluginSource5.includes('RECALLED_FILE') && pluginSource5.includes('appendRecalledRecord')
+  pluginSource5.includes('recalledFile()') && pluginSource5.includes('appendRecalledRecord')
     ? ok('  每次移除都留回执（静默删除比它解决的问题更糟）')
     : fail('  移除没有留下任何记录')
   marketSource2.includes('/dsh-market/recalled')
@@ -1248,6 +1248,36 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource3.includes('.dsh-market-skills')
     ? ok('技能装到市场自己的目录（不碰 ~/.dsh/skills）')
     : fail('技能没有自己的目录 —— 会与用户手写的 skill 混在一起')
+  /**
+   * The profile must be resolved at CALL time, never captured at module load.
+   *
+   * A module-level `const PROFILE_DIR = env.DSH_PROFILE_DIR ?? …'desktop'` made the plugin
+   * target whatever profile the environment named — and `dsh web` boots the `web` profile
+   * with BOTH profile variables unset, so the fallback said `desktop`. The market mounted in
+   * one profile and wrote every install and receipt into another, and nothing reported it.
+   */
+  const resolvesProfileLate =
+    /function profileDir\(\)/.test(pluginSource3)
+    && /let profileDirCache = null/.test(pluginSource3)
+    && !/const PROFILE_DIR\s*=/.test(pluginSource3)
+  resolvesProfileLate
+    ? ok('  profile 在调用时解析（不在模块加载时定死）')
+    : fail('  profile 在模块加载时定死 —— 换个 profile 启动就会写错目录')
+  /**
+   * ...and the install location must OUTRANK the environment.
+   *
+   * Both profile variables are unset under a plain `dsh web`, so nothing else can answer; and
+   * a `dsh web` started from a DSH tool shell inherits `DSH_PROFILE_DIR=…\desktop` from the
+   * desktop host (measured), so an env-first order would write into the desktop profile while
+   * running in the web one. A package loaded out of a profile's `node_modules` belongs to that
+   * profile, whatever the environment claims.
+   */
+  const detectCall = pluginSource3.indexOf('const detected = detectProfileDir()')
+  const envRead = pluginSource3.indexOf('const fromEnv = process.env.DSH_PROFILE_DIR')
+  const installWins = detectCall !== -1 && envRead !== -1 && detectCall < envRead
+  installWins
+    ? ok('  安装位置优先于 DSH_PROFILE_DIR（不会被继承来的旧值带偏）')
+    : fail('  环境变量优先于安装位置 —— dsh web 会写进 desktop profile')
   pluginSource3.includes("get('skills')")
     ? ok('技能经 ctx.skills 注册（注册表的正式扩展点）')
     : fail('技能没有注册进 ctx.skills')
@@ -1295,6 +1325,27 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
   pluginSource3.includes('ctx.skills 可用')
     ? ok('  日志区分「没有 skills 服务」与「服务在但目录为空」')
     : fail('  两种情况的日志无法区分 —— 排查时会误判')
+  /**
+   * The registry must be WAITED FOR, not read once.
+   *
+   * Reading it synchronously at `apply` time is what this did, and in a `dsh web` boot the
+   * service is not in the context yet — measured: absent at t+0, present at t+500ms. So the
+   * market's installed skills were on disk, listed as installed by the page, and never in the
+   * catalog. `webServer` in the same function was already polled, which is what made the
+   * omission invisible: the pattern for how to get this right was three lines away.
+   */
+  const waitsForSkills = /retryUntil\(\s*'skills'[\s\S]{0,600}?SKILLS_TIMEOUT_MS/.test(pluginSource3)
+  waitsForSkills
+    ? ok('  ctx.skills 是等出来的（不是 apply 时同步读一次）')
+    : fail('  同步读一次 ctx.skills —— 服务晚到就永久跳过技能注册')
+  // ...and the "no support" line must be driven by that wait GIVING UP, not by a
+  // re-check on a timer of its own, which could report absence after a success.
+  const giveUpReports =
+    /onGiveUp[\s\S]{0,200}?onGiveUp\(timeoutMs\)/.test(pluginSource3)
+    && /SKILLS_TIMEOUT_MS,\s*\n[\s\S]{0,200}?ctx\.skills 不可用/.test(pluginSource3)
+  giveUpReports
+    ? ok('  「不可用」只在等待确实超时后打印（晚到不会被误报）')
+    : fail('  「不可用」不是由等待超时驱动的 —— 成功之后仍可能打印它')
   /**
    * An installed skill must report its VERSION.
    *

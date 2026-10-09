@@ -364,3 +364,96 @@ node server\cli.mjs publish:self --dir .           # 用服务器上的检出，
 - [ ] stderr **没有** `failed to import`
 - [ ] 左侧栏底部看得到入口，点得开
 - [ ] 安装页上显示的服务端地址是对的
+- [ ] **每一个你要用的 profile 都单独装过**（见 §11——桌面端和 `dsh web` 不是同一个 profile）
+- [ ] 诊断日志里 `[profile]` 那一行的路径**就是你启动的那个 profile**
+
+**每个 profile（装完各查一次）**
+
+- [ ] `~/.dsh/plugin-marketplace-diag.log` 里有 `[skills] ctx.skills 可用（等待 Nms）`
+- [ ] 若你装了技能，目录里能看到它：`<profile>\.dsh-market-skills\<包名>`
+
+---
+
+## 11. 桌面端与 Web 端是两个 profile（各自装一次）
+
+**这一节回答：为什么我从 `dsh web` 打开的界面里看不到「内部插件市场」。**
+
+### 11.1 它们不是同一个东西
+
+| | 桌面端 | Web 端 |
+|---|---|---|
+| 谁在跑 | Electron 桌面壳 | `dsh web` |
+| 用哪个 profile | 桌面安装器起的那个，**默认名就是 `desktop`** | **`web`**（`dsh web` 等价于 `dsh --profile web`，CLI 帮助里就写着） |
+| 插件行从哪来 | `profiles\desktop\package.json` 的 `dsh.profile.bundles` | `profiles\web\package.json` 的 `dsh.profile.bundles` |
+
+**profile 之间不共享**：各自的 `node_modules`、各自的 `cordis.patch.yml`、各自的
+`.dsh-market-skills`、各自的 `.dsh-market-link.json`。所以**装进 `desktop` 不会出现在 `web` 里**，
+这不是 bug，是 profile 隔离。每个你要用的 profile 各跑一次 `dsh plugin --profile <名> add <tgz>`。
+
+> **怎么确认你正在用的是哪个 profile**：看诊断日志里那一行
+> `[profile] profile=<路径> (source: ...)` —— 它每次启动都会写，就是用来回答这个问题的。
+
+### 11.2 实测：装进 `web` profile 之后
+
+在一台机器上把本包装进 `web` profile，然后 `dsh web` 启动，诊断日志是：
+
+```
+[profile] profile=C:\Users\<user>\.dsh\profiles\web (source: 安装位置（node_modules 所在 profile）)
+[apply]   profile=C:\Users\<user>\.dsh\profiles\web
+[skills]  ctx.skills 可用（等待 444ms）；目录 ...\profiles\web\.dsh-market-skills；发现 1 个技能
+[skills]  registered "dot-skill" from dot-skill
+[register] registered 12/12 routes
+[apply]   routes hooked after 448ms ; market url = http://127.0.0.1:<port>/market
+```
+
+三件事同时成立：入口挂上了、**落盘目标是 web profile 自己**、技能进了会话目录。
+
+### 11.3 两条曾经踩过的坑（都已修，但值得知道症状）
+
+**坑一：profile 认错，市场在编辑另一个 profile。**
+`lib/plugin.js` 原来在**模块加载时**算一次 profile：
+
+```js
+const PROFILE_DIR = process.env.DSH_PROFILE_DIR ?? join(DSH_HOME, 'profiles', DSH_PROFILE ?? 'desktop')
+```
+
+而 `dsh web` 启动时**两个变量都是空的**（实测：`DSH_PROFILE=(unset) DSH_PROFILE_DIR=(unset)`），
+于是它回落到 `profiles\desktop`。后果很难发现：**页面正常、安装也报成功**，但文件写进了
+`profiles\desktop\node_modules`、绑定密钥写进了桌面 profile 的 `.dsh-market-link.json`，
+而 `/dsh-market/installed` 报的也是桌面 profile 的清单——**两个界面各说各话**。
+
+现在改为**调用时解析**，并且**优先认自己的安装位置**（`<profile>\node_modules\dsh-plugin-marketplace`，
+向上两级就是那个 profile）。理由：这是唯一不可能错的答案，而且它是 `dsh web` 那种"两个变量都没有"
+的启动下**唯一还有信息**的来源。它同时压过环境变量——从 DSH 会话里启动 `dsh web` 时，
+`DSH_PROFILE_DIR` 会被桌面宿主继承进来并指向 `desktop`（实测），认安装位置就不会被它带偏。
+
+> 链接安装（`node_modules` 下是 junction，开发时常见）解析出来在工作树里，
+> 找不到 profile，此时才回落到环境变量。这种情况请显式给 `DSH_PROFILE_DIR`。
+>
+> **实测过的反例（开发机本身就是这样）**：这台机器上 `profiles\desktop\node_modules\dsh-plugin-marketplace`
+> 是指向 `E:\workspace\dsh` 的 **Junction**（即 §0 里"profile 指向工作树"那种开发布局），
+> 而 Node 的 ESM 加载器会把模块 URL 解析成 **realpath**，所以插件看到的自己在工作树里、
+> 不在任何 profile 中，检测返回 null，按上表回落到环境变量。**产物安装（`dsh plugin add`）不是这样**：
+> 文档 §0 实测过它产出的是**真目录**（`isSymbolicLink = false`），检测于是直接给出 profile 路径。
+> 换句话说：**正式分发的路径靠检测就够；只有开发用的链接安装需要显式 `DSH_PROFILE_DIR`** ——
+> 而那种布局下你本来就在自己的 shell 里启动，变量是 DSH 给的，不会缺。
+
+**坑二：技能服务晚到，被当成"不支持"。**
+`ctx.skills` 原来在 `apply` 时**同步读一次**，读不到就永久跳过注册。实测在 `dsh web` 启动里：
+**t+0ms 是 absent，t+500ms 就 present**。所以市场的技能躺在磁盘上、安装页也列成"已安装"，
+**但 agent 的会话目录里从来没有它**。现在和 `webServer` 一样用 `retryUntil` 等（上限 10 秒，
+比 `webServer` 短，因为"这个组合没有技能支持"是正常状态）。
+
+> 这两处都在 `tools/verify-install.mjs` 里加了预检断言，改回去会立刻报 FAIL。
+
+### 11.4 如果你只想装一次
+
+做不到，这是 profile 隔离决定的，不是本插件能绕开的：loader 只从**当前 profile 的 `node_modules`**
+和 DSH 安装目录解析裸包名。可行的只有两种：
+
+1. **每个 profile 各装一次**（推荐，互不干扰，升级由市场自更新各自处理）；
+2. **只用一个 profile**（例如始终 `dsh web --profile desktop`），那就只有一份，也就没有这个问题。
+
+> 顺带一句：`dsh web` 就是 `--profile web`；**`dsh --profile <别的> web` 会启动那个别的 profile**，
+> 所以"桌面端和 Web 端共用一份"最简单的做法是让 Web 端也指向 `desktop`。
+

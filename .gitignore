@@ -6,3 +6,6 @@ preview/
 .dsh-version-probe.cjs
 # Built distribution tarballs. Regenerate with `node tools/pack-dist.mjs`.
 dist/
+# Local Windows permission-repair records (machine-specific absolute paths and a
+# rollback script). Not project content — see the sandbox-ACL notes.
+.acl-repair/

@@ -1005,6 +1005,11 @@ tools/                        测试、契约预检、只读诊断脚本
 - 发布已可在**服务端控制台**上传 `.tar.gz`（预检 → 确认发布），CLI `publish` 仍然可用。
 - 已装状态来自本机 profile 文件，不是服务端上报的清单。
 - 服务端是前台进程，需要靠 `start-market.bat` 手动拉起；没有做成开机自启。
+- **桌面端与 Web 端是两个 profile，各自要装一次。** 桌面壳用 `desktop`，`dsh web` 用 `web`；
+  两个 profile 的 `node_modules`、patch 层、`.dsh-market-skills` 互不共享，所以装进一个不会出现在
+  另一个里。这是 DSH 的 profile 隔离，不是本插件的缺陷，也绕不开。详见
+  [分发文档 §11](docs/distributing.md)。想只维护一份，就让 Web 端也用 `desktop`：
+  `dsh --profile desktop web`。
 
 ## 4. 排错
 
