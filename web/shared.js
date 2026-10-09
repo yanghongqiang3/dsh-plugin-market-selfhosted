@@ -720,5 +720,15 @@ const REFRESH_KEY = 'dsh.market.refresh'
     doLogout,
     init: boot,
     onAuthenticated,
+    /**
+     * Needed by the install page's auto-login: it adopts the user returned by the session
+     * exchange, and `setMe` is what publishes that to `state` (and to the admin flag).
+     *
+     * It was NOT on this object, so `S.setMe(...)` threw on every successful auto-login —
+     * measured with the page run against a live instance: the TypeError was the last thing
+     * `tryAutoLogin` did, after the token had already been stored. It is here now because the
+     * page is a legitimate consumer, not because the page should reach around the shell.
+     */
+    setMe,
   }
 })(globalThis)

@@ -603,8 +603,10 @@ async function bindIdentity() {
   })
   if (result.ok) {
     binding = result.body?.binding ?? null
-    await saveLinkSecret(result.body?.secret)
-    return { ok: true, unchanged: result.body?.unchanged === true }
+    // Whether the local half took is reported, not swallowed: "bound but not armed" is a
+    // real and confusing state, so the caller gets to say it precisely.
+    const secretSaved = await saveLinkSecret(result.body?.secret)
+    return { ok: true, unchanged: result.body?.unchanged === true, secretSaved }
   }
   return { ok: false, code: result.body?.code, detail: result.body?.detail }
 }
@@ -617,16 +619,26 @@ async function bindIdentity() {
  * once — here.
  */
 async function saveLinkSecret(secret) {
-  if (!secret || !dshIdentity.userId) return
+  if (!secret || !dshIdentity.userId) return false
+  let result
   try {
-    await local('/dsh-market/link', {
+    result = await local('/dsh-market/link', {
       method: 'POST',
       body: { dshUserId: dshIdentity.userId, secret, marketUsername: state.me?.username ?? null },
     })
   } catch {
-    // Not fatal: the binding stands, the user just does not get auto-login next time.
-    status('已绑定，但本机未能保存自动登录凭据（下次仍需手动登录）。', true)
+    return false
   }
+  if (!result?.ok) return false
+  /**
+   * Keep the row in step with the file that was just written.
+   *
+   * This assignment is the fix for a self-contradiction: the enable button wrote the secret,
+   * the toast said auto-login was on, and `linkStored` stayed false — so `renderBinding` drew
+   * 「此设备已关闭自动登录」 directly under that toast, and kept drawing it until a reload.
+   */
+  linkStored = result.body?.hasSecret === true
+  return linkStored
 }
 
 /** Forget the local secret, so a released binding cannot be renewed. */
@@ -639,22 +651,51 @@ async function dropLinkSecret() {
 }
 
 /**
+ * The stored session, and whether this device is armed — straight from the host.
+ *
+ * `/dsh-market/link` is the only place that can answer "is a secret on disk": the page cannot
+ * read the profile, and `/session` answers the same question but only as a side effect of
+ * asking for a session. Reading it here is what lets `renderBinding` tell the truth on a
+ * reload instead of inferring it from a variable that only `tryAutoLogin` ever set.
+ *
+ * POST, not GET, and that is load-bearing: the host refuses any request whose `Origin` is
+ * absent, and a browser does NOT send `Origin` on a same-origin GET. So the read came back
+ * `403 E_FOREIGN_ORIGIN` on every load while the arming POST succeeded — the two halves of
+ * the row disagreeing, with no error shown anywhere.
+ */
+async function readLinkState() {
+  try {
+    const result = await local('/dsh-market/link', { method: 'POST', body: {} })
+    linkStored = result?.body?.hasSecret === true
+  } catch {
+    /* leave the previous value; the row will say what it last knew rather than guess */
+  }
+  return linkStored
+}
+
+/**
  * Ask the plugin for a session using the stored secret — this is the auto-login.
  *
  * The DSH account is signed in and bound, so the user should not have to type a market
  * password on this machine again. The PLUGIN does the exchange, so the credential never
- * reaches this page.
+ * reaches this page. POST for the same `Origin` reason as `readLinkState` above.
  */
 async function tryAutoLogin() {
+  // FIRST, and before the identity gate below: the gate exists to decide whether a sign-in
+  // is POSSIBLE, but whether this device is armed is a separate fact the row displays even
+  // when no session can be fetched.
+  await readLinkState()
   if (dshIdentity.source !== 'account') return false
   let result
   try {
-    result = await local('/dsh-market/session')
+    result = await local('/dsh-market/session', { method: 'POST', body: {} })
   } catch {
     return false
   }
-  // Remembered so the binding row can offer to turn auto-login back ON after a logout.
-  linkStored = result?.body?.hasSecret === true
+  // Kept in step with what the exchange just proved about the secret.
+  if (result?.body && typeof result.body.hasSecret === 'boolean') {
+    linkStored = result.body.hasSecret === true
+  }
   const session = result?.body?.session
   if (!result?.ok || !session?.token) return false
   S.token.set(session.token)
@@ -711,6 +752,11 @@ async function renderBinding() {
      * binding stands. Offer the way back explicitly rather than making the user unbind and
      * rebind to get it — and rather than re-arming it silently, which is the automatic
      * behaviour that was deliberately removed.
+     *
+     * The ENABLED case says so too, and that is not decoration: with only the disabled state
+     * labelled, "armed" looked identical to "the page could not find out" — just a bound row
+     * and a 解绑 button. That is the same ambiguity this row was fixed for, pointing the other
+     * way, and it leaves the user unable to confirm that the button they just pressed worked.
      */
     if (!linkStored) {
       line.textContent += '\n此设备已关闭自动登录（退出登录会关闭它）。'
@@ -723,12 +769,22 @@ async function renderBinding() {
         const result = await bindIdentity()
         if (!result.ok) {
           reportBindFailure(result)
-        } else {
+        } else if (result.secretSaved) {
           status('已在本设备启用自动登录。下次打开安装页将直接进入。')
+        } else {
+          /**
+           * The binding stands but this device is NOT armed, and the row below will say so.
+           * Announcing success here is exactly how the two halves came to contradict each
+           * other — so this path reports the failure instead, and `renderBinding` (called
+           * next) draws the same state the toast describes.
+           */
+          status('绑定已生效，但本机没能保存自动登录凭据，下次仍需手动登录。可再试一次；若一直失败，看诊断日志的 [link] 记录。', true)
         }
         await renderBinding()
       })
       box.appendChild(arm)
+    } else {
+      line.textContent += '\n此设备已开启自动登录（下次打开安装页将直接进入）。'
     }
     return
   }
@@ -766,6 +822,10 @@ async function doBind() {
   const result = await bindIdentity()
   if (result.ok) {
     status(result.unchanged ? '这个 DSH 账号已经绑在你名下，无需重复绑定。' : '已绑定。')
+    // Bound but not armed is a state the user has to be told about, not a silent downgrade.
+    if (!result.secretSaved) {
+      status('已绑定，但本机没能保存自动登录凭据（下次仍需手动登录）。可在绑定行点「在此设备启用自动登录」重试。', true)
+    }
   } else if (result.skipped) {
     status('这台机器没有可用的 DSH 账号 ID，无法绑定。', true)
   } else {

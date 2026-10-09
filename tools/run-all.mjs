@@ -106,6 +106,39 @@ const broken = []
     process.exit(1)
   }
   console.log(`语法检查：${scripts.length} 个测试脚本全部通过`)
+
+  /**
+   * The two served pages carry their whole application as an INLINE classic script, and no
+   * other check parses it: they are not modules, so `node --check` on them is meaningless,
+   * and nothing loads them outside a browser. A `?` written bare where `\?` was meant in a
+   * regex there is a SyntaxError that ships — the page simply goes blank when opened.
+   */
+  const pages = ['market.html', 'console.html']
+  const badPages = []
+  for (const page of pages) {
+    const file = join(ROOT, 'web', page)
+    if (!existsSync(file)) continue
+    const html = readFileSync(file, 'utf8')
+    const blocks = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)]
+    for (const [index, match] of blocks.entries()) {
+      // `new Function` parses without running; the host globals the script expects are not
+      // needed to find a syntax error.
+      try {
+        // eslint-disable-next-line no-new-func
+        new Function(match[1])
+      } catch (error) {
+        badPages.push(`${page} inline #${index}: ${String(error?.message ?? error)}`)
+      }
+    }
+  }
+  if (badPages.length > 0) {
+    console.log('页面内联脚本语法未通过 —— 打开就是白屏：')
+    for (const line of badPages) console.log(`  · ${line}`)
+    console.log('')
+    console.log('RESULT: INCOMPLETE')
+    process.exit(1)
+  }
+  console.log(`语法检查：web/ 的 ${pages.length} 个页面内联脚本全部通过`)
   console.log('')
 }
 
