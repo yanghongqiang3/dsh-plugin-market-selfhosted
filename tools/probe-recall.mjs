@@ -111,7 +111,12 @@ mount()
 for (let i = 0; i < 80 && routes.length === 0; i += 1) await new Promise((r) => setTimeout(r, 50))
 const route = (path) => routes.find((r) => String(r.path) === path)
 
-const invoke = async (path, body, { origin } = {}) => {
+/**
+ * The default `Origin` is the port this harness registers, because the routes that write to the
+ * profile are same-origin guarded and a real browser attaches `Origin` to every POST. A caller
+ * that wants to prove the guard refuses a bare request passes `{ origin: null }` explicitly.
+ */
+const invoke = async (path, body, { origin = 'http://127.0.0.1:17901' } = {}) => {
   let captured = null
   const listeners = new Map()
   const req = {

@@ -684,9 +684,26 @@ MARKET_SERVICE_URL=http://10.0.0.5:8787
 GET  /market                    市场页面（自行调用服务端）
 GET  /dsh-market/config         告诉页面服务端在哪
 GET  /dsh-market/installed      本机已装（从 profile 自己的文件推断）
-POST /dsh-market/install        { token, name, version, sha256 } → 下载 → 校验 → 解包 → 注册
-POST /dsh-market/uninstall      { name } → 删文件 + 摘注册
+POST /dsh-market/install        { token, name, version, sha256 } → 下载 → 校验 → 解包 → 注册（**仅同源**）
+POST /dsh-market/uninstall      { name } → 删文件 + 摘注册（**仅同源**；`name` 必须是合法包名）
 ```
+
+> **这两条写操作都只接受同源请求**（`ownOrigin`，与 `/link`、`/session`、`/recalled/dismiss` 同一套，
+> 用法也一样：校验加在真正写数据的那次调用上）。
+>
+> 这不是多余的防护：本机端口只绑 `127.0.0.1`，**但浏览器里的任意网页都能向它发请求**——
+> CORS 会回显任意 `Origin`，而 `http://127.0.0.1` 被浏览器当作可信来源，所以一个 https 页面
+> 打它不算混合内容、不会被拦。回环绑定挡的是"别的机器"，CSRF 挡的是"这台机器上的网页"，
+> 两者不是一回事。
+
+> **`name` 会被当成路径，所以必须校验。** `uninstall` 曾经把调用方的 `name` 直接 `join` 进
+> `rmSync`：`{"name":".."}` 拼出 profile 根目录，**一个请求就删掉整个 profile**（含 `node_modules`、
+> `cordis.patch.yml`、绑定密钥），并且回 `ok:true`；`"../.."` 会到 `~/.dsh/profiles`。
+>
+> 现在两处都用 `checkName`，用的是 `server/lib/layout.js` 里**同一个** `PACKAGE_NAME_RE`
+> （不是第二份实现——两条必须一致的规则迟早会不一致），并且每个目标路径在删除/写入前还要过
+> `containedPath()` 的包含断言。`tools/test-host.mjs` 用一个 profile 内的哨兵文件驱动这两条
+> 路由来守它；`tools/verify-install.mjs` 从源码侧守"路由真的调了这两个检查"。
 
 ### 1.2.1 页面顶部要为空
 

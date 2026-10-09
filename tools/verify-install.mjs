@@ -924,6 +924,45 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     ? ok('  发会话前校验来源')
     : fail('  发会话的路由没有校验来源')
 
+  /**
+   * The two routes that WRITE to the profile need the same guard, and they did not have it.
+   *
+   * `/uninstall` additionally took an unvalidated `name` straight into `rmSync`: `{"name":".."}`
+   * joined to the profile root, so one POST from any page the operator visited deleted the whole
+   * profile and answered `ok:true`. `/install` writes into `node_modules`, `package.json` and the
+   * patch layer. Both are checked here as source contracts, and driven for real in
+   * `tools/test-host.mjs`.
+   */
+  const routeWindow = (name) => {
+    const at = pluginSource2.indexOf(`\${PREFIX}/${name}\``)
+    return at < 0 ? '' : pluginSource2.slice(at, at + 2500)
+  }
+  const installRoute = routeWindow('install')
+  const uninstallRoute = routeWindow('uninstall')
+  installRoute.includes('ownOrigin(req)')
+    ? ok('  写入 profile 前校验来源')
+    : fail('  安装路由没有校验来源 —— 任何网站都能改写这台机器的 profile')
+  uninstallRoute.includes('ownOrigin(req)')
+    ? ok('  删除 profile 内容前校验来源')
+    : fail('  卸载路由没有校验来源 —— 任何网站都能触发删除')
+  // `name` becomes a filesystem path, so it is an input to rmSync — not a label.
+  pluginSource2.includes('function checkName')
+    ? ok('宿主插件校验包名（name 会被当成路径）')
+    : fail('宿主插件不校验 name —— 一个 ".." 就能删掉整个 profile')
+  // Bound to a `const` rather than started inline: a line beginning with `/` is DIVISION, so a
+  // regex literal there is a syntax error — the exact hazard `run-all.mjs` preflights for.
+  const installChecksName = /async function installEntry\([\s\S]{0,400}?checkName\(name\)/.test(pluginSource2)
+  const uninstallChecksName = /function uninstallEntry\(name\)[\s\S]{0,400}?checkName\(name\)/.test(pluginSource2)
+  installChecksName
+    ? ok('  安装前校验 name')
+    : fail('  安装不校验 name')
+  uninstallChecksName
+    ? ok('  卸载前校验 name')
+    : fail('  卸载不校验 name')
+  pluginSource2.includes('function containedPath')
+    ? ok('宿主插件断言路径落在目标目录之内（正则之外的第二道）')
+    : fail('宿主插件没有路径包含断言 —— 名字规则错了就没有兜底')
+
   // The client side must actually persist and redeem the refresh token.
   sharedSource2.includes('REFRESH_KEY')
     ? ok('页面保存 refresh 令牌')

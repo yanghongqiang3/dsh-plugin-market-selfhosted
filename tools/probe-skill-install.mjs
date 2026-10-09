@@ -160,9 +160,21 @@ const fakeSkills = {
     return () => { skillCatalog.delete(skill.name) }
   },
 }
+/**
+ * The `Origin` a page served by the CURRENT mount would send.
+ *
+ * The routes that write into the profile are same-origin guarded, and the plugin compares
+ * against the port of the most recent mount — this file mounts twice, on 17801 and then 17802,
+ * so the value has to follow the mount instead of being a constant. A real page always sends
+ * `Origin` on a POST; a harness that omits it is not simulating the page.
+ */
+let pageOrigin = null
 apply({
   get: (name) => {
-    if (name === 'webServer') return { port: 17801, register: (route) => { routes.push(route); return () => {} } }
+    if (name === 'webServer') {
+      pageOrigin = 'http://127.0.0.1:17801'
+      return { port: 17801, register: (route) => { routes.push(route); return () => {} } }
+    }
     if (name === 'skills') return fakeSkills
     return undefined
   },
@@ -175,7 +187,8 @@ const invoke = async (path, body) => {
   let captured = null
   const listeners = new Map()
   const req = {
-    method: 'POST', url: path, headers: { 'content-type': 'application/json' },
+    method: 'POST', url: path,
+    headers: { 'content-type': 'application/json', ...(pageOrigin ? { origin: pageOrigin } : {}) },
     on: (event, cb) => { if (!listeners.has(event)) listeners.set(event, []); listeners.get(event).push(cb); return req },
     destroy: () => {},
   }
@@ -294,7 +307,10 @@ registered.length = 0
 const routes2 = []
 apply({
   get: (name) => {
-    if (name === 'webServer') return { port: 17802, register: (r) => { routes2.push(r); return () => {} } }
+    if (name === 'webServer') {
+      pageOrigin = 'http://127.0.0.1:17802'
+      return { port: 17802, register: (r) => { routes2.push(r); return () => {} } }
+    }
     if (name === 'skills') return fakeSkills
     return undefined
   },

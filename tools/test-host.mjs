@@ -225,6 +225,139 @@ ok('包含 /dsh-market/open（客户端半边取地址用）', registered.some((
   }
 }
 
+/**
+ * The two routes that WRITE to the profile, driven with hostile input.
+ *
+ * This block exists because of a shipped stop-ship bug. `/uninstall` had no origin check and no
+ * name check, so `{"name":".."}` — one POST from any web page the operator visited, no token —
+ * resolved `join(marketSkillsDir(), '..')` to the profile root and `rmSync(recursive)` deleted
+ * the whole profile: `package.json`, `node_modules`, `cordis.patch.yml`, the binding secret.
+ * `"../.."` reached `~/.dsh/profiles` and all three profiles with it. `/install` was missing the
+ * origin check too.
+ *
+ * Asserting the routes EXIST says nothing about this — every case below drives the handler. The
+ * load-bearing assertion is the sentinel file: it lives inside the scratch profile, so a hostile
+ * call that deletes the profile (or escapes into its parent) fails these checks.
+ */
+{
+  const { EventEmitter } = await import('node:events')
+  const { existsSync, mkdirSync, rmSync, writeFileSync } = await import('node:fs')
+
+  const profileDir = process.env.DSH_PROFILE_DIR
+  mkdirSync(profileDir, { recursive: true })
+  const sentinel = join(profileDir, 'SENTINEL-do-not-delete.txt')
+  writeFileSync(sentinel, 'must survive every hostile call\n')
+
+  /** The port this harness registered, so `ownOrigin` accepts the same-origin cases. */
+  const SAME_ORIGIN = 'http://127.0.0.1:12345'
+  const routeOf = (path) => registered.find((r) => String(r.path) === path)
+
+  /**
+   * Drive a handler the way the webserver does: TWO arguments, with the body arriving as stream
+   * events. `readBody` listens on `data`/`end`, so a plain object would answer E_BAD_JSON and the
+   * test would prove nothing about the real path.
+   */
+  const call = async (route, { origin, body }) => {
+    const req = new EventEmitter()
+    req.method = 'POST'
+    req.url = String(route.path)
+    req.headers = origin === undefined ? {} : { origin }
+    req.destroy = () => {}
+    const record = { status: 0, raw: null }
+    const res = {
+      writeHead: (status) => { record.status = status },
+      end: (payload) => { record.raw = payload ?? null },
+    }
+    const done = route.handler(req, res)
+    const text = JSON.stringify(body ?? {})
+    // Emitted after the handler attached its listeners: `readBody` binds them synchronously.
+    setImmediate(() => {
+      req.emit('data', Buffer.from(text, 'utf8'))
+      req.emit('end')
+    })
+    await done
+    let parsed = null
+    try { parsed = JSON.parse(String(record.raw)) } catch { /* a non-JSON body stays null */ }
+    return { status: record.status, body: parsed }
+  }
+
+  const stillThere = () => existsSync(sentinel) && existsSync(profileDir)
+
+  const uninstall = routeOf('/dsh-market/uninstall')
+  const install = routeOf('/dsh-market/install')
+  ok('注册了 /dsh-market/uninstall', uninstall !== undefined)
+  ok('注册了 /dsh-market/install', install !== undefined)
+
+  if (uninstall !== undefined) {
+    // The CSRF half: the request comes from the operator's own machine, so binding the port to
+    // loopback does not help — only the origin check does.
+    const foreign = await call(uninstall, { origin: 'https://evil.example', body: { name: '..' } })
+    ok(
+      '外部来源的卸载被拒（403 E_FOREIGN_ORIGIN）',
+      foreign.status === 403 && foreign.body?.code === 'E_FOREIGN_ORIGIN',
+      `status=${foreign.status} body=${JSON.stringify(foreign.body)}`,
+    )
+    ok('  外部来源的请求没有删掉 profile', stillThere())
+
+    // No Origin at all is refused too — the method this guard actually protects.
+    const noOrigin = await call(uninstall, { body: { name: '..' } })
+    ok('没有 Origin 的卸载被拒（403）', noOrigin.status === 403, `status=${noOrigin.status}`)
+    ok('  无 Origin 的请求没有删掉 profile', stillThere())
+
+    // Same origin, hostile NAME. The shared regex rejects every traversal shape; the containment
+    // check behind it is what the sentinel actually tests.
+    const hostile = ['..', '../..', 'a/../b', '@scope/..', '/abs/path', 'C:\\evil', 'a\\b', '.', '~']
+    let refused = 0
+    for (const name of hostile) {
+      const result = await call(uninstall, { origin: SAME_ORIGIN, body: { name } })
+      if (result.body?.ok === false && result.body?.code === 'E_BAD_NAME') refused += 1
+      else console.error(`FAIL  名为 ${JSON.stringify(name)} 的卸载没有被拒：${JSON.stringify(result.body)}`)
+    }
+    ok(
+      `穿越形状的 name 全部被拒（${refused}/${hostile.length}）`,
+      refused === hostile.length,
+      hostile.map((entry) => JSON.stringify(entry)).join(' '),
+    )
+    ok('  恶意 name 一个都没能删掉 profile', stillThere())
+
+    const missing = await call(uninstall, { origin: SAME_ORIGIN, body: {} })
+    ok('缺 name 仍是 E_BAD_REQUEST（不是崩溃）', missing.body?.code === 'E_BAD_REQUEST', JSON.stringify(missing.body))
+
+    // The legitimate capability must stay intact: a real plugin directory still goes away.
+    const victim = join(profileDir, 'node_modules', '@dsh-internal', 'fake-plugin')
+    mkdirSync(victim, { recursive: true })
+    writeFileSync(join(victim, 'package.json'), '{"name":"@dsh-internal/fake-plugin"}\n')
+    const legit = await call(uninstall, { origin: SAME_ORIGIN, body: { name: '@dsh-internal/fake-plugin' } })
+    ok(
+      '同源卸载一个真实存在的插件仍然成功',
+      legit.body?.ok === true && legit.body?.filesRemoved === true && !existsSync(victim),
+      JSON.stringify(legit.body),
+    )
+    ok('  合法卸载只删了目标目录，profile 完好', stillThere())
+  }
+
+  if (install !== undefined) {
+    const foreignInstall = await call(install, { origin: 'https://evil.example', body: { name: 'dot-skill' } })
+    ok(
+      '外部来源的安装被拒（403 E_FOREIGN_ORIGIN）',
+      foreignInstall.status === 403 && foreignInstall.body?.code === 'E_FOREIGN_ORIGIN',
+      `status=${foreignInstall.status} body=${JSON.stringify(foreignInstall.body)}`,
+    )
+    // The name check runs BEFORE the token check, so a hostile name is refused on its own terms
+    // rather than after a round trip to the service.
+    const hostileInstall = await call(install, { origin: SAME_ORIGIN, body: { name: '..' } })
+    ok(
+      '同源的恶意 name 在取 token 之前就被拒（E_BAD_NAME）',
+      hostileInstall.body?.code === 'E_BAD_NAME',
+      JSON.stringify(hostileInstall.body),
+    )
+    ok('  被拒的安装没有动 profile', stillThere())
+  }
+
+  // Leave the scratch profile as the assertions after this block expect to find it.
+  rmSync(join(profileDir, 'node_modules'), { recursive: true, force: true })
+}
+
 // A composition without webServer must stay inert instead of throwing.
 try {
   pluginMod.apply({ get: () => undefined, effect: (fn) => { fn(); return () => {} } })

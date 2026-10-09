@@ -124,7 +124,9 @@ const fakeReq = (body) => {
   const req = {
     method: 'POST',
     url: '/',
-    headers: { 'content-type': 'application/json' },
+    // Same-origin guarded route: a browser attaches `Origin` to every POST, so a harness that
+    // omits it is not simulating the page. The port is the one this file registers below.
+    headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:65535' },
     on: (event, cb) => {
       if (!listeners.has(event)) listeners.set(event, [])
       listeners.get(event).push(cb)
