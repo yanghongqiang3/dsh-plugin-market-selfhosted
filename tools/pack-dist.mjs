@@ -3,9 +3,10 @@
  *
  *   node tools/pack-dist.mjs [outFile]
  *
- * Produces a `.tar.gz` a DSH client installs with one command:
+ * Produces a `.tar.gz` a DSH client installs with one command (the path the packer prints at
+ * the end, with the CURRENT version — do not hardcode it here, it drifts):
  *
- *   dsh plugin --profile <name> add ./dist/dsh-plugin-marketplace-0.1.0.tgz
+ *   dsh plugin --profile <name> add ./dist/dsh-plugin-marketplace-<version>.tgz
  *
  * WHY THE `package/` PREFIX IS LOAD-BEARING
  *

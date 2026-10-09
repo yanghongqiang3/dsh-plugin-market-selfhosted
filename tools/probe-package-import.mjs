@@ -22,7 +22,16 @@ import { pathToFileURL } from 'node:url'
 import { readTarGz } from '../server/lib/pack.js'
 import { extractTarGz } from '../lib/tar.js'
 
-const defaultArchive = resolve(import.meta.dirname, '..', 'dist', 'dsh-plugin-marketplace-0.1.0.tgz')
+/**
+ * The default archive is DERIVED from package.json, not written out.
+ *
+ * It was the literal `dsh-plugin-marketplace-0.1.0.tgz`, so the moment the version moved on,
+ * this probe silently started checking the PREVIOUS build — the one file whose whole job is to
+ * validate the current archive was validating a stale one. `pack-dist.mjs` had the same string
+ * in a usage comment.
+ */
+const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '..', 'package.json'), 'utf8'))
+const defaultArchive = resolve(import.meta.dirname, '..', 'dist', `${pkg.name}-${pkg.version}.tgz`)
 const archivePath = resolve(process.argv[2] ?? defaultArchive)
 
 let problems = 0
