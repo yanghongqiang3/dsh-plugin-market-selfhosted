@@ -50,6 +50,7 @@ const SUITES = [
   ['分页与编辑', 'probe-paging.mjs', []],
   ['刷新令牌', 'probe-refresh.mjs', []],
   ['自动登录', 'probe-autologin.mjs', []],
+  ['页面启动', 'probe-shared-boot.mjs', []],
   ['技能安装', 'probe-skill-install.mjs', []],
   ['制品类型', 'probe-artifact-kind.mjs', []],
   ['zip 发布', 'probe-zip-publish.mjs', []],

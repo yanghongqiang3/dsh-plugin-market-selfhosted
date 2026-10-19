@@ -895,6 +895,11 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
    * A separate route from `/state` because it is a separate intent. `state = revoked` stops
    * distribution and leaves installed copies alone; recall is the security action, and folding
    * it into `revoked` would make a temporary withdrawal erase everybody's install.
+   *
+   * `version: '*'` recalls every row of that name (all channels, snapshot of what exists now) —
+   * see `setRecalled` for why it is a snapshot rather than a standing rule. It is opt-in by an
+   * explicit `'*'` and NOT by an omitted field: a caller that forgets `version` keeps getting
+   * `E_NOT_FOUND`, so no missing field can ever turn into "recall everything".
    */
   route('POST', '/dsh-market/admin/artifacts/recall', async (req, res) => {
     const who = admin(req, res)
@@ -903,6 +908,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     const name = String(body?.name ?? '')
     const version = String(body?.version ?? '')
     const channel = String(body?.channel ?? 'stable')
+    const everyVersion = version === '*'
     /**
      * Explicit rather than a toggle, so a retried request cannot flip the meaning — the same
      * reason the state route takes a state instead of "advance".
@@ -911,12 +917,22 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       json(res, 400, { ok: false, code: 'E_BAD_REQUEST', detail: '需要 recalled: true 或 false' })
       return
     }
-    const changed = artifacts.setRecalled(name, version, channel, body.recalled)
-    store.audit('artifact.recall', { name, version, channel, recalled: body.recalled, changed }, who.username)
+    const affected = artifacts.setRecalled(name, version, channel, body.recalled)
+    const changed = affected > 0
+    // `affected` in the audit is what tells a batch recall apart from a single-row one later.
+    store.audit('artifact.recall', {
+      name,
+      version,
+      channel: everyVersion ? '*' : channel,
+      recalled: body.recalled,
+      affected,
+    }, who.username)
     json(res, changed ? 200 : 404, {
       ok: changed,
       code: changed ? null : 'E_NOT_FOUND',
       recalled: body.recalled,
+      version,
+      affected,
     })
   }, { auth: 'none' })
 

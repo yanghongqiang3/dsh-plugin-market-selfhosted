@@ -1099,19 +1099,34 @@ function renderArtifacts() {
       const allVersions = Array.isArray(artifact.versions) && artifact.versions.length > 0
         ? artifact.versions
         : [{ version: artifact.version, channel: artifact.channel, status: artifact.status, recalled: artifact.recalled }]
-      const fields = []
-      if (allVersions.length > 1) {
-        fields.push({
-          name: 'target',
-          label: `版本（该插件共 ${allVersions.length} 个）`,
-          type: 'select',
-          value: `${artifact.version}@${artifact.channel}`,
-          options: allVersions.map((v) => ({
+      /**
+       * The scope picker is ALWAYS shown, even when the name currently has one version.
+       *
+       * It used to be gated on `allVersions.length > 1`, and that hid the capability exactly
+       * where it is first wanted: an operator reaching for "recall everything" is often looking
+       * at a name that has a single version right now, and a control that does not render is
+       * indistinguishable from one that does not exist. With one version the two choices do the
+       * same thing — the hint says so instead of leaving the operator to guess which is "safe".
+       */
+      const fields = [{
+        name: 'target',
+        label: allVersions.length > 1 ? `召回范围（共 ${allVersions.length} 个版本）` : '召回范围',
+        type: 'select',
+        value: `${artifact.version}@${artifact.channel}`,
+        options: [
+          /**
+           * Snapshot semantics, spelled out where the choice is made. `*` marks the versions
+           * that exist NOW; a version published afterwards is not recalled, and that is the
+           * point — a recall also blocks distribution, so a standing name-level rule would
+           * make the rebuilt release uninstallable.
+           */
+          { value: '*', label: `全部版本（当前 ${allVersions.length} 个）` },
+          ...allVersions.map((v) => ({
             value: `${v.version}@${v.channel}`,
             label: `${v.version}　${v.channel}　${v.recalled ? '已召回' : v.status}`,
           })),
-        })
-      }
+        ],
+      }]
       const turningOn = artifact.recalled !== true
       openForm({
         title: `${turningOn ? '召回' : '取消召回'} ${artifact.name}`,
@@ -1126,22 +1141,33 @@ function renderArtifacts() {
             + '· 插件：需要重启 DSH（装载器只在启动时读）\n'
             + '· 同时停止分发：目录里不再出现，也下载不到\n'
             + '· 离线、或再也不会启动 DSH 的机器不会收到 —— 拉取式客户端无法被强制\n'
+            + (allVersions.length > 1
+              ? `· 「全部版本」只召回当前这 ${allVersions.length} 个；之后再发布的新版本不受影响\n`
+              : '· 当前只有 1 个版本，「全部版本」与它效果相同\n')
           : '取消召回后重新可分发。已被移除的副本不会自动装回来，需要各自重装。',
         submitLabel: turningOn ? '召回' : '取消召回',
         fields,
         onSubmit: async (values) => {
           const picked = String(values.target ?? `${artifact.version}@${artifact.channel}`)
+          const everyVersion = picked === '*'
+          // `*` carries no `@`, so the version@channel split below must not run for it.
           const at = picked.lastIndexOf('@')
-          const version = picked.slice(0, at)
-          const channel = picked.slice(at + 1)
+          const version = everyVersion ? '*' : picked.slice(0, at)
+          const channel = everyVersion ? 'stable' : picked.slice(at + 1)
           const result = await service('/dsh-market/admin/artifacts/recall', {
             method: 'POST',
             body: { name: artifact.name, version, channel, recalled: turningOn },
           })
           if (!result.ok) return { ok: false, detail: result.body?.detail || result.body?.code }
+          // The service answers how many rows it touched; reporting it is what makes a batch
+          // recall distinguishable from a lucky single one.
+          const affected = Number(result.body?.affected ?? 1)
+          const what = everyVersion
+            ? `${artifact.name}（${affected} 个版本）`
+            : `${artifact.name}@${version}`
           status(turningOn
-            ? `${artifact.name}@${version} 已召回。客户端下次启动时会移除它；技能几秒内生效。`
-            : `${artifact.name}@${version} 已取消召回。`)
+            ? `${what} 已召回。客户端下次启动时会移除；技能几秒内生效。`
+            : `${what} 已取消召回。`)
           await loadArtifacts()
           return { ok: true }
         },

@@ -10,6 +10,8 @@
  *
  *   - a recalled artifact is actually removed from the profile
  *   - a recall names a VERSION, so a newer unrecalled copy is left alone
+ *   - `version: '*'` marks every row that exists NOW and nothing published later, while an
+ *     omitted version stays `E_NOT_FOUND` (a missing field must never mean "everything")
  *   - a recall that cannot be delivered (no credential, offline) removes nothing rather than
  *     guessing
  *   - every removal leaves a receipt, because files vanishing unexplained is a worse failure
@@ -244,6 +246,80 @@ console.log('--- 版本精确：召回 1.0.0 不动已装的 1.1.0 ---')
 }
 
 console.log('')
+console.log('--- 全部版本召回：快照，不是规则 ---')
+{
+  /**
+   * `version: '*'` recalls every row of that name. The properties worth pinning:
+   *
+   *   - an OMITTED version must stay `E_NOT_FOUND`, never silently mean "everything";
+   *   - the batch marks rows the client does not have, not just the installed one;
+   *   - it is a SNAPSHOT: a version published afterwards is untouched and still downloadable —
+   *     without that, a recall (which also blocks distribution) would make the rebuilt release
+   *     uninstallable until someone remembered to cancel it.
+   */
+  const BATCH = '@dsh-internal/recall-batch'
+  publish(BATCH, '1.0.0', 'plugin')
+  publish(BATCH, '2.0.0', 'plugin')
+  const installedBatch = await install(BATCH, '2.0.0')
+  ok('装上 2.0.0', installedBatch.body?.ok === true, JSON.stringify(installedBatch.body).slice(0, 80))
+  ok('  插件目录存在', existsSync(pluginDir(BATCH)))
+
+  const statusOf = async (name, version) => {
+    const answer = await post('/dsh-market/installed-status',
+      { items: [{ name, version, channel: 'stable' }] }, token)
+    return answer.body?.entries?.[0] ?? null
+  }
+
+  // Safety first: the opt-in is an explicit `'*'`, not a missing field.
+  const missing = await post('/dsh-market/admin/artifacts/recall', { name: BATCH, recalled: true }, token)
+  ok('省略 version 不会被当成「全部」（仍是 E_NOT_FOUND）',
+    missing.status === 404 && missing.body?.code === 'E_NOT_FOUND', `${missing.status}/${missing.body?.code}`)
+  ok('  而且什么都没被标记', (await statusOf(BATCH, '1.0.0'))?.recalled === false)
+
+  const batchOn = await post('/dsh-market/admin/artifacts/recall',
+    { name: BATCH, version: '*', recalled: true }, token)
+  ok('version=* 召回成功', batchOn.status === 200 && batchOn.body?.ok === true,
+    `${batchOn.status}/${batchOn.body?.code}`)
+  ok('  报告影响了几个版本（2 个）', batchOn.body?.affected === 2, String(batchOn.body?.affected))
+  ok('  应答回显 version=*', batchOn.body?.version === '*', String(batchOn.body?.version))
+  ok('  1.0.0 被标记（客户端并没有装它）', (await statusOf(BATCH, '1.0.0'))?.recalled === true)
+  ok('  2.0.0 也被标记', (await statusOf(BATCH, '2.0.0'))?.recalled === true)
+
+  process.env.MARKET_SERVICE_TOKEN = token
+  const swept = await reconcileRecalled()
+  ok('对账把它移除了', swept.status === 'removed' && !existsSync(pluginDir(BATCH)), JSON.stringify(swept))
+  ok('  回执记的是本机装的 2.0.0', receipt().some((e) => e.name === BATCH && e.version === '2.0.0'),
+    JSON.stringify(receipt().filter((e) => e.name === BATCH)))
+
+  // Snapshot semantics: published AFTER the batch recall.
+  publish(BATCH, '3.0.0', 'plugin')
+  const after = await statusOf(BATCH, '3.0.0')
+  ok('召回之后发布的新版本没有被连带标记（快照不是规则）', after?.recalled === false, JSON.stringify(after))
+  const catalogAfter = await (await fetch(`${BASE}/dsh-market/catalog?limit=100`,
+    { headers: { authorization: `Bearer ${token}` } })).json()
+  ok('  新版本仍可分发（否则召回会把修复版堵死）',
+    catalogAfter.entries.some((e) => e.name === BATCH && e.version === '3.0.0'),
+    JSON.stringify(catalogAfter.entries.filter((e) => e.name === BATCH).map((e) => e.version)))
+
+  // The single-version path is unchanged, and now also reports how many rows it touched.
+  const one = await post('/dsh-market/admin/artifacts/recall',
+    { name: BATCH, version: '1.0.0', channel: 'stable', recalled: true }, token)
+  ok('单版本召回仍然可用', one.status === 200 && one.body?.affected === 1,
+    `${one.status}/${one.body?.affected}`)
+
+  // Reversible as a batch.
+  const batchOff = await post('/dsh-market/admin/artifacts/recall',
+    { name: BATCH, version: '*', recalled: false }, token)
+  ok('可以整批取消召回', batchOff.status === 200 && batchOff.body?.affected === 3,
+    `${batchOff.status}/${batchOff.body?.affected}`)
+  const downloadBack = await fetch(
+    `${BASE}/dsh-market/download?name=${encodeURIComponent(BATCH)}&version=2.0.0`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )
+  ok('  取消后旧版本重新可下载', downloadBack.status === 200, String(downloadBack.status))
+}
+
+console.log('')
 console.log('--- 召回取不到凭据时不猜 ---')
 {
   const target = await install(PLUGIN, '1.0.0')
@@ -343,6 +419,7 @@ console.log('')
 console.log('结论：')
 console.log('  · 召回让客户端真的移除已安装的副本；撤回仍然只是停止分发。')
 console.log('  · 按名字+版本精确匹配，所以召回 1.0.0 不会删掉已装的 1.1.0。')
+console.log('  · version=* 是快照：只标记当时已存在的版本，之后发布的新版本不受影响。')
 console.log('  · 拿不到凭据时不猜、不删。')
 console.log('  · 每次移除都留回执，页面据此告知用户。')
 console.log('  · 服务端不再分发被召回的版本，错误码与 revoked 区分。')

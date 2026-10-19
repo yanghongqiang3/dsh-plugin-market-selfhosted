@@ -1179,6 +1179,45 @@ for (const file of ['server/index.mjs', 'server/cli.mjs', 'server/lib/policy.js'
     ? ok('  管理列表仍能看到被召回的版本（否则改不回来）')
     : fail('  管理列表把召回也过滤掉了')
 
+  /**
+   * "All versions" is a SNAPSHOT of the rows that exist when it runs, and it must be opt-in by
+   * an explicit `'*'`. Two ways this could go wrong later, both silent:
+   *
+   *   - defaulting a missing `version` to `'*'` would turn a caller's forgotten field into
+   *     "remove this from every machine";
+   *   - a standing rule ("recall this name forever") would keep the rebuilt release undis-
+   *     tributable, because a recall also blocks distribution.
+   */
+  const batchPath = /version === '\*'[\s\S]{0,200}?WHERE name = \?/.test(artifactsSource4)
+  batchPath
+    ? ok('  支持整批召回（version=* 命中该名字下所有行）')
+    : fail('  没有整批召回的实现 —— 只能一次一个版本')
+  const noImplicitBatch = /const version = String\(body\?\.version \?\? ''\)/.test(httpSource4)
+  if (noImplicitBatch) ok('  漏传 version 不会被当成「全部」（仍是 E_NOT_FOUND）')
+  else fail('  version 的缺省值被改成了「全部」—— 少一个字段就会清空所有人的安装')
+  httpSource4.includes('affected')
+    ? ok('  应答与审计带 affected（批量与单行在日志里可区分）')
+    : fail('  批量召回没有报告影响了几个版本')
+  consoleSource5.includes("value: '*'")
+    ? ok('  控制台提供「全部版本」选项')
+    : fail('  控制台没有「全部版本」选项 —— 只能一个版本一个版本点')
+  // Gating the picker on "more than one version" hid the feature for every name that had one —
+  // which is most of them, and exactly when an operator first reaches for "all versions". Checked
+  // inside the RECALL dialog only: the 「改状态」 dialog legitimately gates its version picker,
+  // because it always adds a state field afterwards.
+  const recallAt = consoleSource5.indexOf("'取消召回' : '召回'")
+  const recallDialog = recallAt < 0 ? '' : consoleSource5.slice(recallAt, recallAt + 4000)
+  if (recallAt < 0) {
+    fail('  找不到召回按钮 —— 范围选择器的契约无法检查')
+  } else if (/if \(allVersions\.length > 1\) \{/.test(recallDialog)) {
+    fail('  召回的范围选择器被「多版本才显示」挡住 —— 单版本时这个能力根本看不见')
+  } else {
+    ok('  召回的范围选择器始终显示（单版本时也不藏起来）')
+  }
+  consoleSource5.includes('之后再发布的新版本不受影响')
+    ? ok('  控制台写明了快照语义（否则操作员会以为整批永久封杀）')
+    : fail('  控制台没有说明「全部版本」只是快照')
+
   // The client half: it has to KNOW, which it never did.
   pluginSource5.includes('reconcileRecalled')
     ? ok('客户端启动时对账（此前完全不知道撤回/召回的存在）')

@@ -424,12 +424,27 @@ export class Artifacts {
    * install.
    *
    * Recall implies "do not distribute" too; `policy` enforces that separately.
+   *
+   * `version === '*'` recalls EVERY row of that name, across channels — "this plugin as a whole
+   * is bad". It is a SNAPSHOT, not a standing rule: the rows that exist now are marked, and a
+   * version published afterwards is NOT recalled. That is the property that makes the action
+   * usable — the usual reason to pull a whole series is a bad build, and the rebuilt release has
+   * to be able to go out without first cancelling the recall (a recall also blocks distribution,
+   * so a rule would silently make the fix uninstallable).
+   *
+   * Returns the number of rows changed. A batch that matched nothing must not look like a
+   * successful recall, and the console reports the count back to the operator.
    */
   setRecalled(name, version, channel, recalled) {
-    const result = this.db
-      .prepare('UPDATE artifacts SET recalled = ?, recalled_at = ? WHERE name = ? AND version = ? AND channel = ?')
-      .run(recalled ? 1 : 0, recalled ? Date.now() : null, name, version, channel)
-    return Number(result.changes) > 0
+    const at = recalled ? Date.now() : null
+    const result = version === '*'
+      ? this.db
+        .prepare('UPDATE artifacts SET recalled = ?, recalled_at = ? WHERE name = ?')
+        .run(recalled ? 1 : 0, at, name)
+      : this.db
+        .prepare('UPDATE artifacts SET recalled = ?, recalled_at = ? WHERE name = ? AND version = ? AND channel = ?')
+        .run(recalled ? 1 : 0, at, name, version, channel)
+    return Number(result.changes)
   }
 
   setState(name, version, channel, state) {

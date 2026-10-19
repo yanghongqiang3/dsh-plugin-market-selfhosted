@@ -661,12 +661,32 @@ const REFRESH_KEY = 'dsh.market.refresh'
       state.profileDir = localConfig?.profileDir ?? null
     }
 
-    // A token issued by a different service is meaningless here: drop it rather
-    // than showing a confusing 401.
-    if (token.get() && global.localStorage.getItem(SERVICE_KEY) !== state.serviceUrl) {
-      // A token from a DIFFERENT service is meaningless here, and so is its refresh token.
-      token.clear()
-      refreshToken.clear()
+    /**
+     * A token issued by a DIFFERENT service is meaningless here: drop it rather than showing a
+     * confusing 401.
+     *
+     * "No record" is NOT "a different service", and conflating them is what made the install page
+     * demand the password on every launch. `SERVICE_KEY` is written by the password login only,
+     * while auto-login (the install page's `beforeBoot`, which runs above) stores a session
+     * WITHOUT it — so on a fresh browser origin this check wiped the session auto-login had just
+     * obtained, refresh token included, and the page fell through to the login form. DSH now
+     * launches with `--port 0`, so every launch is a fresh origin and the bug became certain
+     * rather than occasional.
+     *
+     * A token that exists with no recorded service can only have come from this page on this
+     * origin, so adopt the service we just resolved. If it truly belongs elsewhere, `/auth/me`
+     * answers 401 and `request()` already switches to the login view.
+     */
+    const recordedService = global.localStorage.getItem(SERVICE_KEY)
+    if (token.get()) {
+      if (recordedService === null) {
+        // Only adopt a configured service; without one the page stops at `noService` below.
+        if (state.serviceConfigured) global.localStorage.setItem(SERVICE_KEY, state.serviceUrl ?? '')
+      } else if (recordedService !== state.serviceUrl) {
+        // A token from a DIFFERENT service is meaningless here, and so is its refresh token.
+        token.clear()
+        refreshToken.clear()
+      }
     }
 
     // Say which service the login is for. Rendered here rather than after a
