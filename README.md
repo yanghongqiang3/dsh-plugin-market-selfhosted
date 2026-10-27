@@ -17,6 +17,7 @@ DSH 内部插件市场：**一个私有市场服务端 + 一个 DSH 客户端插
 
 ## 目录
 
+- [安装](#安装)
 - [使用场景](#使用场景)
 - [实现的功能](#实现的功能)
 - [架构与数据流](#架构与数据流)
@@ -28,6 +29,25 @@ DSH 内部插件市场：**一个私有市场服务端 + 一个 DSH 客户端插
 - [测试](#测试)
 - [已知限制](#已知限制)
 - [排错](#排错)
+
+---
+
+## 安装
+
+先部署市场服务端（本机、局域网或 Docker，见[在自己电脑上搭建](#在自己电脑上搭建)），再安装 DSH 客户端插件：
+
+```bash
+# 桌面版默认 profile 是 desktop；dsh web 用 web
+dsh plugin --profile desktop add github:yanghongqiang3/dsh-plugin-market-selfhosted
+```
+
+`v*` tag 构建后会发布预构建包，也可以下载后本地安装：
+
+```bash
+dsh plugin --profile desktop add ./dsh-plugin-market-internal.tgz
+```
+
+装完设置 `MARKET_SERVICE_URL` 并重启 DSH，左侧栏底部会出现「内部插件市场」。
 
 ---
 
