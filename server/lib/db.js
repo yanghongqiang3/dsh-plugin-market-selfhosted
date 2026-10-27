@@ -137,6 +137,41 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS audit_at ON audit(at);
 
+    /**
+     * Installed inventory reported by clients — the other half of what "installed" means.
+     *
+     * The service cannot see a profile, so the only way to answer 「谁装了哪些插件」 is for the
+     * client to say so. A report is a SNAPSHOT per device, not a delta: the client sends
+     * everything it has, and anything absent is treated as removed. That single rule covers
+     * installs, uninstalls and recall removals without a second event type.
+     *
+     * device_id is generated and kept in the client's profile. It is what makes the snapshot
+     * safe for one account with several machines (or the desktop and web profiles): without it,
+     * a report from machine A would look like "everything else was uninstalled".
+     *
+     * Ownership is the account that reported LAST. That is a real limit and it is documented
+     * where an operator reads these numbers: a device shared by two market accounts shows under
+     * the second one after its next report.
+     */
+    CREATE TABLE IF NOT EXISTS install_devices (
+      device_id   TEXT PRIMARY KEY,
+      username    TEXT NOT NULL REFERENCES users(username) ON DELETE CASCADE,
+      profile     TEXT,
+      item_count  INTEGER NOT NULL DEFAULT 0,
+      reported_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS install_devices_username ON install_devices(username);
+
+    CREATE TABLE IF NOT EXISTS install_items (
+      device_id   TEXT NOT NULL REFERENCES install_devices(device_id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      version     TEXT,
+      kind        TEXT NOT NULL DEFAULT 'plugin',
+      reported_at INTEGER NOT NULL,
+      PRIMARY KEY (device_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS install_items_name ON install_items(name);
+
     CREATE TABLE IF NOT EXISTS meta (
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL

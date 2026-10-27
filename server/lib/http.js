@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { evaluate, statusFor } from './policy.js'
 import { ArchiveError, inspectArchive, normaliseArchive, sha256 } from './pack.js'
+import { PACKAGE_NAME_RE } from './layout.js'
 import { paginate } from './store.js'
 
 const MAX_JSON_BYTES = 64 * 1024
@@ -961,16 +962,28 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
      * the console — the one screen that can revoke it back. Drafts and review-only artifacts
      * vanished the same way, so a draft could never be promoted.
      */
-    const decorated = artifacts.adminRows().map((artifact) => ({
-      ...artifact,
-      versions: artifacts.listVersions(artifact.name).map((item) => ({
-        version: item.version,
-        channel: item.channel,
-        status: item.status,
-        // Per version, so a recall picker can show which ones are already recalled.
-        recalled: item.recalled === true,
-      })),
-    }))
+    /**
+     * Install statistics are joined onto each artifact row rather than given a tab of their
+     * own: an operator looking at a plugin's state is already looking at the row that should
+     * say how many people have it.
+     */
+    const installStats = new Map(store.allPluginInstallStats().map((entry) => [entry.name, entry]))
+    const decorated = artifacts.adminRows().map((artifact) => {
+      const stats = installStats.get(artifact.name)
+      return {
+        ...artifact,
+        installers: stats?.installers ?? 0,
+        devices: stats?.devices ?? 0,
+        downloads: stats?.downloads ?? 0,
+        versions: artifacts.listVersions(artifact.name).map((item) => ({
+          version: item.version,
+          channel: item.channel,
+          status: item.status,
+          // Per version, so a recall picker can show which ones are already recalled.
+          recalled: item.recalled === true,
+        })),
+      }
+    })
     const needle = String(params.q ?? '').trim().toLowerCase()
     const filtered = needle === ''
       ? decorated
@@ -1007,7 +1020,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
   //
   // Two reasons. First, the market's artifact format is flat while an installable npm
   // tarball must keep everything under `package/` — the market cannot distribute this
-  // plugin through the same path it distributes others (§7 of docs/distributing.md).
+  // plugin through the same path it distributes others.
   // Second, the service and the plugin are deployed together: whoever updates the
   // service has the new package in hand, so the service is the natural place to carry it
   // and no separate distribution channel has to be maintained.
@@ -1162,6 +1175,79 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
     json(res, 200, { ok: true, entries })
   })
 
+  /** Hard bounds, because the body is client-supplied and is parsed before anything else. */
+  const MAX_REPORTED_ITEMS = 500
+  const REPORT_DEVICE_RE = /^[A-Za-z0-9._:-]{8,128}$/
+
+  /**
+   * Validate one inventory report.
+   *
+   * Unknown package names are DROPPED rather than rejected: a machine may still hold an
+   * artifact this database no longer knows about (a rebuilt service, a purged artifact), and
+   * refusing the whole report would also lose the items the service can account for. Dropping
+   * keeps the statistics to things this market actually published.
+   */
+  const normaliseInstallReport = (body) => {
+    const deviceId = typeof body?.deviceId === 'string' ? body.deviceId.trim() : ''
+    if (!REPORT_DEVICE_RE.test(deviceId)) {
+      return { ok: false, code: 'E_BAD_DEVICE', detail: 'deviceId 缺失或格式不合法' }
+    }
+    const profile = typeof body?.profile === 'string' && body.profile.trim() !== ''
+      ? body.profile.trim().slice(0, 64)
+      : null
+    if (!Array.isArray(body?.items)) {
+      return { ok: false, code: 'E_BAD_ITEMS', detail: 'items 必须是数组' }
+    }
+    if (body.items.length > MAX_REPORTED_ITEMS) {
+      return { ok: false, code: 'E_TOO_MANY_ITEMS', detail: `一次最多上报 ${MAX_REPORTED_ITEMS} 项` }
+    }
+    const items = new Map()
+    let ignored = 0
+    for (const raw of body.items) {
+      const name = typeof raw?.name === 'string' ? raw.name.trim() : ''
+      if (!PACKAGE_NAME_RE.test(name)) {
+        return { ok: false, code: 'E_BAD_ITEM', detail: `非法包名：${String(raw?.name ?? '').slice(0, 80)}` }
+      }
+      if (artifacts.listVersions(name).length === 0) {
+        ignored += 1
+        continue
+      }
+      let version = raw?.version === undefined || raw?.version === null ? null : String(raw.version)
+      if (version !== null && !/^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/.test(version)) version = null
+      const kind = raw?.kind === 'skill' ? 'skill' : raw?.kind === 'bundle' ? 'bundle' : 'plugin'
+      items.set(name, { name, version, kind })
+    }
+    return { ok: true, deviceId, profile, items: [...items.values()], ignored }
+  }
+
+  /**
+   * The client telling the service what its profile holds.
+   *
+   * This is the only way the server can answer 「哪个账号装了哪些插件」: installs happen on the
+   * machine, and a download is not an install. The body is a SNAPSHOT for one device, so an
+   * item missing from it is treated as removed — installs, uninstalls and recall removals all
+   * use the same route with no event type.
+   *
+   * Identity is taken from the token and nowhere else. The device id is client-supplied by
+   * necessity (the server has no other way to tell two machines apart); it can only affect
+   * rows owned by the caller, so spoofing it cannot touch another account's inventory.
+   */
+  route('POST', '/dsh-market/installed/report', async (req, res, caller) => {
+    const body = await readBody(req)
+    const report = normaliseInstallReport(body)
+    if (report.ok !== true) {
+      json(res, 400, { ok: false, code: report.code, detail: report.detail })
+      return
+    }
+    const result = store.reportInstalled({
+      username: caller.user.username,
+      deviceId: report.deviceId,
+      profile: report.profile,
+      items: report.items,
+    })
+    json(res, 200, { ok: true, ...result, ignored: report.ignored, reportedAt: Date.now() })
+  })
+
   route('POST', '/dsh-market/identity/bind', async (req, res, caller) => {
     const body = await readBody(req)
     const result = store.bindDshAccount({
@@ -1255,6 +1341,119 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       return
     }
     json(res, 200, { ok: true, binding: result.binding })
+  }, { auth: 'none' })
+
+  // ------------------------------------------------------------ install statistics
+
+  /**
+   * Account dimension: which account installed which plugins.
+   *
+   * Only accounts that have reported at least one installed item appear. An absent account
+   * means "no report", not "nothing installed" — the console says so where these numbers are
+   * shown, because the two readings lead to opposite conclusions about coverage.
+   */
+  route('GET', '/dsh-market/admin/installs/accounts', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    // `?usernames=a,b` narrows the answer to the accounts on screen, so the accounts table
+    // can show a count per row without pulling every account's inventory. Same convention as
+    // `/admin/identity`.
+    const raw = url?.searchParams?.get('usernames') ?? ''
+    const usernames = raw === '' ? null : raw.split(',').map((name) => name.trim()).filter(Boolean)
+    const page = store.listInstallsByAccount({ ...pageParams(url), usernames })
+    json(res, 200, {
+      ok: true,
+      entries: page.entries,
+      accounts: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+      meta: store.installCoverage(),
+    })
+  }, { auth: 'none' })
+
+  /**
+   * One account's installed inventory, fetched only when an operator asks for it.
+   *
+   * The accounts table shows a COUNT, not a list: an inventory can be long, and joining it
+   * onto every row would make the table unreadable and the query wasteful. A click asks this
+   * route, which is also the moment the data has to be current.
+   */
+  route('GET', '/dsh-market/admin/installs/account', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    const username = String(url?.searchParams?.get('username') ?? '').trim()
+    if (username === '') {
+      json(res, 400, { ok: false, code: 'E_BAD_USERNAME' })
+      return
+    }
+    const user = store.findUser(username)
+    if (!user) {
+      json(res, 404, { ok: false, code: 'E_NO_SUCH_USER' })
+      return
+    }
+    // Paged like every other admin list: an inventory can outgrow one dialog.
+    const page = paginate(store.installedItemsOf(username), pageParams(url).limit, pageParams(url).offset)
+    json(res, 200, {
+      ok: true,
+      username,
+      displayName: user.displayName,
+      items: page.entries,
+      entries: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+    })
+  }, { auth: 'none' })
+
+  /**
+   * The other direction of the same question: which accounts install one plugin.
+   *
+   * The artifact row shows a COUNT; clicking it asks this route so the count can be verified
+   * against names instead of being taken on faith. Accounts are deduplicated the same way the
+   * count is, so the number of entries here is the number displayed.
+   */
+  route('GET', '/dsh-market/admin/installs/plugin', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    const name = String(url?.searchParams?.get('name') ?? '').trim()
+    if (name === '' || !PACKAGE_NAME_RE.test(name)) {
+      json(res, 400, { ok: false, code: 'E_BAD_NAME' })
+      return
+    }
+    const params = pageParams(url)
+    const page = paginate(store.installedAccountsOf(name), params.limit, params.offset)
+    json(res, 200, {
+      ok: true,
+      name,
+      accounts: page.entries,
+      entries: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+    })
+  }, { auth: 'none' })
+
+  /**
+   * Plugin dimension: installers (distinct accounts), devices, and total downloads.
+   *
+   * Names come from BOTH current installs and the download audit, so a plugin that everyone
+   * has uninstalled still shows the downloads it served instead of vanishing. Downloads
+   * include updates and retries; they are not a lower bound on installs.
+   */
+  route('GET', '/dsh-market/admin/installs/plugins', (req, res, _caller, url) => {
+    const who = admin(req, res)
+    if (!who) return
+    const page = store.listInstallsByPlugin(pageParams(url))
+    json(res, 200, {
+      ok: true,
+      entries: page.entries,
+      plugins: page.entries,
+      total: page.total,
+      limit: page.limit,
+      offset: page.offset,
+      meta: store.installCoverage(),
+    })
   }, { auth: 'none' })
 
   // ----------------------------------------------------------------- dispatch

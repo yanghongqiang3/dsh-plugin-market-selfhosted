@@ -66,6 +66,232 @@ export class Store {
       .map((row) => ({ ...row, detail: safeParse(row.detail) }))
   }
 
+  // -------------------------------------------------------- installed inventory
+
+  /**
+   * Replace the inventory one device says it has.
+   *
+   * The report is a SNAPSHOT, not a delta. That is what lets one route carry installs,
+   * uninstalls and recall removals: an item missing from the report is gone. It is also why
+   * the device id is load-bearing — with one row per account, a report from machine B would
+   * delete machine A's items.
+   *
+   * Added / removed / updated are returned for diagnostics and for the client's log; the
+   * authoritative answer to "what is installed" is always the table, not those counts.
+   */
+  reportInstalled({ username, deviceId, profile = null, items = [] }) {
+    const at = Date.now()
+    const before = new Map(
+      this.db.prepare('SELECT name, version FROM install_items WHERE device_id = ?').all(deviceId)
+        .map((row) => [row.name, row.version ?? null]),
+    )
+    const next = new Map(items.map((item) => [item.name, item]))
+    const added = [...next.keys()].filter((name) => !before.has(name))
+    const removed = [...before.keys()].filter((name) => !next.has(name))
+    const updated = [...next.entries()]
+      .filter(([name, item]) => before.has(name) && before.get(name) !== (item.version ?? null))
+      .map(([name]) => name)
+
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare(`
+        INSERT INTO install_devices (device_id, username, profile, item_count, reported_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET
+          username = excluded.username,
+          profile = excluded.profile,
+          item_count = excluded.item_count,
+          reported_at = excluded.reported_at
+      `).run(deviceId, username, profile, next.size, at)
+      this.db.prepare('DELETE FROM install_items WHERE device_id = ?').run(deviceId)
+      const insert = this.db.prepare(
+        'INSERT INTO install_items (device_id, name, version, kind, reported_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      for (const item of next.values()) {
+        insert.run(deviceId, item.name, item.version ?? null, item.kind ?? 'plugin', at)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return { deviceId, username, installed: next.size, added, removed, updated }
+  }
+
+  /** Global figures for the statistics header: who reported, how much, and total downloads. */
+  installCoverage() {
+    const row = this.db.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM install_devices) AS devices,
+        (SELECT COUNT(DISTINCT username) FROM install_devices) AS accounts,
+        (SELECT COUNT(*) FROM install_items) AS items,
+        (SELECT MAX(reported_at) FROM install_devices) AS last_reported_at,
+        (SELECT COUNT(*) FROM audit WHERE action = 'download') AS downloads
+    `).get()
+    return {
+      devices: Number(row.devices ?? 0),
+      accounts: Number(row.accounts ?? 0),
+      items: Number(row.items ?? 0),
+      lastReportedAt: row.last_reported_at ?? null,
+      downloads: Number(row.downloads ?? 0),
+    }
+  }
+
+  /**
+   * Which accounts currently have one plugin, for the click-through on 安装人数.
+   *
+   * Same data as the account dimension, read from the other end: one row per account, with
+   * the versions/devices that account reported. Account-deduplicated on purpose — the count
+   * on screen is people, and this list must be the same people.
+   */
+  installedAccountsOf(name) {
+    return this.db.prepare(`
+      SELECT d.username,
+             u.display_name AS displayName,
+             b.dsh_user_id AS dshUserId,
+             GROUP_CONCAT(DISTINCT i.version) AS versions,
+             COUNT(DISTINCT d.device_id) AS devices,
+             MAX(i.reported_at) AS reportedAt
+      FROM install_items i
+      JOIN install_devices d ON d.device_id = i.device_id
+      LEFT JOIN users u ON u.username = d.username
+      LEFT JOIN dsh_bindings b ON b.market_username = d.username
+      WHERE i.name = ?
+      GROUP BY d.username
+      ORDER BY d.username
+    `).all(name).map((row) => ({
+      username: row.username,
+      displayName: row.displayName,
+      dshUserId: row.dshUserId,
+      versions: String(row.versions ?? '').split(',').filter(Boolean),
+      devices: Number(row.devices ?? 0),
+      reportedAt: row.reportedAt,
+    }))
+  }
+
+  /** One account's plugins, aggregated across every device it reported. */
+  installedItemsOf(username) {
+    return this.db.prepare(`
+      SELECT i.name,
+             i.kind,
+             GROUP_CONCAT(DISTINCT i.version) AS versions,
+             COUNT(DISTINCT i.device_id) AS devices,
+             MAX(i.reported_at) AS reported_at
+      FROM install_items i
+      JOIN install_devices d ON d.device_id = i.device_id
+      WHERE d.username = ?
+      GROUP BY i.name, i.kind
+      ORDER BY i.name
+    `).all(username).map((row) => ({
+      name: row.name,
+      kind: row.kind,
+      versions: String(row.versions ?? '').split(',').filter(Boolean),
+      devices: Number(row.devices ?? 0),
+      reportedAt: row.reported_at,
+    }))
+  }
+
+  /**
+   * Account dimension: which account installed which plugins.
+   *
+   * Only accounts with at least one installed item appear. An account with no report is
+   * absent — which is honest: the service does not know, and pretending it has zero installs
+   * would read as "this person installed nothing" instead of "this person has not reported".
+   */
+  listInstallsByAccount({ limit = DEFAULT_PAGE_SIZE, offset = 0, q = '', usernames = null } = {}) {
+    const needle = String(q ?? '').trim().toLowerCase()
+    const wanted = Array.isArray(usernames) && usernames.length > 0 ? new Set(usernames) : null
+    let rows = this.db.prepare(`
+      SELECT d.username,
+             u.display_name AS displayName,
+             b.dsh_user_id AS dshUserId,
+             COUNT(DISTINCT d.device_id) AS deviceCount,
+             COUNT(DISTINCT i.name) AS pluginCount,
+             MAX(d.reported_at) AS lastReportedAt
+      FROM install_devices d
+      JOIN install_items i ON i.device_id = d.device_id
+      LEFT JOIN users u ON u.username = d.username
+      LEFT JOIN dsh_bindings b ON b.market_username = d.username
+      GROUP BY d.username
+      ORDER BY pluginCount DESC, d.username
+    `).all().map((row) => ({ ...row, items: this.installedItemsOf(row.username) }))
+    if (wanted !== null) rows = rows.filter((account) => wanted.has(account.username))
+    const filtered = needle === ''
+      ? rows
+      : rows.filter((account) =>
+        [account.username, account.displayName ?? '', ...account.items.map((item) => item.name)]
+          .some((field) => String(field).toLowerCase().includes(needle)))
+    return paginate(filtered, limit, offset)
+  }
+
+  /**
+   * Plugin dimension: how many PEOPLE have it (distinct accounts), on how many devices, and
+   * how many downloads the service has served in total.
+   *
+   * The name universe is the union of current installs and past downloads, so a plugin that
+   * everyone uninstalled still shows its download count instead of disappearing. Downloads
+   * come from the audit log and therefore include updates and retries — they are not a
+   * lower bound on installs, but they are what the service itself actually served.
+   */
+  listInstallsByPlugin({ limit = DEFAULT_PAGE_SIZE, offset = 0, q = '' } = {}) {
+    const needle = String(q ?? '').trim().toLowerCase()
+    const entries = this.allPluginInstallStats()
+    const filtered = needle === ''
+      ? entries
+      : entries.filter((entry) => entry.name.toLowerCase().includes(needle))
+    return paginate(filtered, limit, offset)
+  }
+
+  /**
+   * The same data without paging, so callers can join it onto another list.
+   *
+   * The console's artifact list is paged by artifact NAME, so asking this table for a page of
+   * its own would line up two different orders. The artifact rows are tens, not thousands;
+   * building the map once and looking up each row is both simpler and correct.
+   */
+  allPluginInstallStats() {
+    const downloads = new Map(
+      this.db.prepare(`
+        SELECT json_extract(detail, '$.name') AS name,
+               COUNT(*) AS downloads,
+               MAX(at) AS lastDownloadAt
+        FROM audit
+        WHERE action = 'download' AND json_extract(detail, '$.name') IS NOT NULL
+        GROUP BY name
+      `).all().map((row) => [row.name, row]),
+    )
+    const installed = new Map(
+      this.db.prepare(`
+        SELECT i.name,
+               COUNT(DISTINCT d.username) AS installers,
+               COUNT(DISTINCT i.device_id) AS devices,
+               GROUP_CONCAT(DISTINCT i.version) AS versions,
+               MAX(i.reported_at) AS lastInstalledAt
+        FROM install_items i
+        JOIN install_devices d ON d.device_id = i.device_id
+        GROUP BY i.name
+      `).all().map((row) => [row.name, row]),
+    )
+    const entries = [...new Set([...downloads.keys(), ...installed.keys()])]
+      .filter((name) => typeof name === 'string' && name !== '')
+      .map((name) => {
+        const current = installed.get(name)
+        const served = downloads.get(name)
+        return {
+          name,
+          installers: Number(current?.installers ?? 0),
+          devices: Number(current?.devices ?? 0),
+          downloads: Number(served?.downloads ?? 0),
+          versions: String(current?.versions ?? '').split(',').filter(Boolean),
+          lastInstalledAt: current?.lastInstalledAt ?? null,
+          lastDownloadAt: served?.lastDownloadAt ?? null,
+        }
+      })
+    // People first, then reach (downloads), then a stable name order.
+    entries.sort((a, b) => b.installers - a.installers || b.downloads - a.downloads || a.name.localeCompare(b.name))
+    return entries
+  }
+
   // -------------------------------------------------------------------- users
 
   findUser(username) {

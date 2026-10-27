@@ -538,6 +538,94 @@ const REFRESH_KEY = 'dsh.market.refresh'
     })
   }
 
+  /**
+   * A read-only dialog that fetches ONE PAGE at a time.
+   *
+   * The earlier `openInfo` printed a whole list as text. That is fine for a handful of rows
+   * and wrong for an installation inventory or an account list that can grow without bound:
+   * a long text node is slow to render, has no way to move through it, and hides the fact that
+   * there is more. `loadPage` is called again on every pager change; the dialog never holds
+   * the full list.
+   *
+   * A plain `div` (not a `form`) is used deliberately: the pager buttons are shared controls
+   * and do not set `type=button`, so inside a form they would submit it and reload the page.
+   */
+  function openPagedList({
+    title = '详情',
+    pageSize = 20,
+    empty = '没有数据。',
+    loadPage,
+    renderLine,
+  }) {
+    return new Promise((resolve) => {
+      const dialog = global.document.createElement('dialog')
+      dialog.className = 'dlg'
+      const body = global.document.createElement('div')
+      body.className = 'dlg-form'
+      const heading = global.document.createElement('h2')
+      heading.textContent = title
+      const list = global.document.createElement('div')
+      list.className = 'dlg-list'
+      const pagerHost = global.document.createElement('div')
+      pagerHost.className = 'pager'
+      const actions = global.document.createElement('div')
+      actions.className = 'dlg-actions'
+      const close = global.document.createElement('button')
+      close.type = 'button'
+      close.className = 'btn btn-primary'
+      close.textContent = '关闭'
+      actions.appendChild(close)
+      body.appendChild(heading)
+      body.appendChild(list)
+      body.appendChild(pagerHost)
+      body.appendChild(actions)
+      dialog.appendChild(body)
+
+      let closed = false
+      // Responses can arrive out of order when the user clicks through pages quickly; only
+      // the newest request may write to the dialog.
+      let ticket = 0
+      const pager = makePager({
+        mount: pagerHost,
+        pageSize,
+        onChange: ({ limit, offset }) => { void refresh(limit, offset) },
+      })
+
+      async function refresh(limit, offset) {
+        const mine = ++ticket
+        list.textContent = '加载中…'
+        let payload
+        try {
+          payload = await loadPage({ limit, offset })
+        } catch (error) {
+          payload = { ok: false, error: String(error?.message ?? error) }
+        }
+        if (closed || mine !== ticket) return
+        if (payload?.ok !== true) {
+          list.textContent = payload?.error ?? '读取失败。'
+          return
+        }
+        const rows = Array.isArray(payload.items) ? payload.items : []
+        list.textContent = rows.length === 0 ? empty : rows.map(renderLine).join('\n')
+        pager.setTotal(payload.total ?? rows.length)
+      }
+
+      const finish = () => {
+        closed = true
+        dialog.close()
+        dialog.remove()
+        resolve(true)
+      }
+      dialog.addEventListener('close', () => { closed = true; dialog.remove() })
+      close.addEventListener('click', finish)
+      dialog.addEventListener('click', (event) => { if (event.target === dialog) finish() })
+      global.document.body.appendChild(dialog)
+      dialog.showModal()
+      void refresh(pageSize, 0)
+      close.focus()
+    })
+  }
+
   // ---------------------------------------------------------------- pagination
   //
   // Server-side: the shell only reports which page is wanted and how many rows exist.
@@ -733,6 +821,7 @@ const REFRESH_KEY = 'dsh.market.refresh'
     miniButton,
     openForm,
     openConfirm,
+    openPagedList,
     makePager,
     PAGE_SIZES,
     doLogin,

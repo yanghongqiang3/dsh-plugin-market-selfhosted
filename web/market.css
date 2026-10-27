@@ -315,6 +315,12 @@
 .dlg-body{display:flex;flex-direction:column;gap:10px;max-height:60vh;overflow:auto}
 .dlg-form .field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--label2)}
 .dlg-form .field > span:first-child{font-weight:600;color:var(--label)}
+/* Dialog body text: also used by the read-only info dialog, which lists one plugin per line. */
+.dlg-form .hint{color:var(--label2);font-size:12px;line-height:1.6;max-height:60vh;overflow:auto}
+/* Paged list body: one row per line, scrolls, and never grows the dialog past the viewport. */
+.dlg-list{color:var(--label2);font-size:12px;line-height:1.7;white-space:pre-wrap;
+          max-height:46vh;overflow:auto;padding-right:4px}
+.dlg-form .pager{margin-top:0}
 .dlg-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:2px}
 
 /**

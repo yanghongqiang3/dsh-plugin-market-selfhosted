@@ -133,8 +133,7 @@ export function unpackToMap(buffer) {
  *
  * This also lifts a documented limitation: the market could not distribute a package
  * with subdirectories at all, because `inspectArchive` insisted on a root-level
- * `package.json` and rejected anything else with E_NOT_PACKAGE. See §7 of
- * docs/distributing.md.
+ * `package.json` and rejected anything else with E_NOT_PACKAGE.
  */
 export function inspectArchive(buffer) {
   const raw = readAnyArchive(buffer)

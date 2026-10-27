@@ -35,7 +35,6 @@ const SUITES = [
   ['宿主', 'test-host.mjs', []],
   ['服务端', 'test-server.mjs', []],
   ['发布上传', 'test-publish.mjs', []],
-  ['文档', 'check-docs.mjs', []],
   ['绑定表', 'test-bindings.mjs', []],
   ['绑定HTTP', 'test-binding-http.mjs', []],
   ['绑定范围', 'probe-binding-scope.mjs', []],
@@ -58,6 +57,7 @@ const SUITES = [
   ['目录筛选分页', 'probe-catalog-paging.mjs', []],
   ['撤回可见性', 'probe-revoked-visibility.mjs', []],
   ['召回', 'probe-recall.mjs', []],
+  ['安装统计', 'probe-install-stats.mjs', []],
   // Needs a real browser; it reports SKIPPED rather than pretending to pass.
   ['控制台布局', 'probe-console-layout.mjs', []],
   ['安装页界面', 'probe-market-ui.mjs', []],

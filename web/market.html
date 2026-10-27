@@ -533,7 +533,13 @@ async function doUninstall(entry, button) {
   const label = button.textContent
   button.textContent = '卸载中…'
   try {
-    const result = await local('/dsh-market/uninstall', { method: 'POST', body: { name: entry.name } })
+    // The token is forwarded for the same reason as on install: the host reports the
+    // changed inventory to the service, and only a real session can say whose it is.
+    // It is optional — uninstalling locally must work while signed out.
+    const result = await local('/dsh-market/uninstall', {
+      method: 'POST',
+      body: { name: entry.name, token: S.token.get() },
+    })
     if (!result.ok) {
       status(`卸载失败：${result.body?.detail || result.body?.code}`, true)
       return

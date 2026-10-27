@@ -27,7 +27,7 @@
  *
  * This is a DIFFERENT format from the market's stored artifacts: those are flat
  * (root-level `package.json`, no prefix), because `server/lib/pack.js` reads
- * `package.json` at the archive root. Keep the two apart — see `docs/distributing.md`.
+ * `package.json` at the archive root. Keep the two apart.
  */
 import { existsSync, mkdtempSync, mkdirSync, copyFileSync, cpSync, rmSync, statSync, writeFileSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -48,7 +48,7 @@ const ROOT = resolve(HERE, '..')
  * to import with MODULE_NOT_FOUND — caught by `tools/probe-package-import.mjs`, which
  * imports the packaged copy the way the loader does.
  */
-const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
+const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web']
 const INCLUDE_FILES = ['server/lib/version.js', 'server/lib/layout.js']
 const SKIP = new Set(['node_modules', '.git', '.market', 'preview', '.research'])
 

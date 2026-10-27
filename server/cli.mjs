@@ -15,7 +15,7 @@
  *   node server/cli.mjs bind:list
  *   node server/cli.mjs bind:add   --dsh-user <DSH 账号 ID> --user alice [--name 显示名]
  *   node server/cli.mjs bind:rm    --dsh-user <DSH 账号 ID> | --user alice
- *   node server/cli.mjs catalog | audit [--limit 50] | prune
+ *   node server/cli.mjs catalog | audit [--limit 50] | installs [--limit 20] | prune
  *
  *   node server/cli.mjs publish:self [--archive dist/xxx.tgz | --dir .]
  *       把「插件市场自己」的包放到服务端，客户端启动时会自动取用（见 §1.7）。
@@ -62,7 +62,7 @@ import {
  * copy exists so a deployment needs nothing from `tools/`.
  */
 function packWithNpmRoot(root, pkg) {
-  const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web', 'docs']
+  const INCLUDE = ['package.json', 'cordis.patch.yml', 'README.md', 'lib', 'web']
   // `lib/plugin.js` imports the shared semver module, so it has to ship with the client.
   // Leaving it out yields a package that installs cleanly and then fails to import.
   const INCLUDE_FILES = ['server/lib/version.js', 'server/lib/layout.js']
@@ -595,6 +595,53 @@ switch (command) {
     break
   }
 
+  /**
+   * Installation statistics, in the same two dimensions the console shows.
+   *
+   * The data comes from client reports, not from downloads: a download is not an install.
+   * A machine that never reports is absent rather than counted as zero — printing a zero
+   * would read as "nobody installed it" instead of "nobody told us".
+   */
+  case 'installs': {
+    const { db, store } = open()
+    const limit = Number(args.limit ?? 20)
+
+    console.log(bold('按账号：账号 → 已安装插件'))
+    const accounts = store.listInstallsByAccount({ limit })
+    if (accounts.entries.length === 0) {
+      console.log(dim('  （还没有客户端上报过安装清单）'))
+    } else {
+      for (const account of accounts.entries) {
+        const items = account.items
+          .map((item) => (item.versions.length > 0 ? `${item.name}@${item.versions.join('/')}` : item.name))
+          .join('、')
+        const at = account.lastReportedAt ? new Date(account.lastReportedAt).toLocaleString() : '-'
+        console.log(`  ${bold(account.username)}  ${dim(`${account.pluginCount} 个插件 / ${account.deviceCount} 台设备 / 最近上报 ${at}`)}`)
+        console.log(dim(`    ${items || '—'}`))
+      }
+    }
+
+    console.log('')
+    console.log(bold('按插件：安装人数（账号去重） / 设备数 / 总下载次数'))
+    const plugins = store.listInstallsByPlugin({ limit })
+    if (plugins.entries.length === 0) {
+      console.log(dim('  （还没有可统计的插件）'))
+    } else {
+      for (const plugin of plugins.entries) {
+        console.log(`  ${bold(plugin.name)}  ${plugin.installers} 人 / ${plugin.devices} 台 / ${plugin.downloads} 次下载`)
+      }
+    }
+
+    const meta = store.installCoverage()
+    console.log('')
+    console.log(dim(
+      `覆盖：${meta.accounts} 个账号 / ${meta.devices} 台设备 / ${meta.items} 个安装项；`
+      + `全站下载 ${meta.downloads} 次`,
+    ))
+    db.close()
+    break
+  }
+
   case 'prune': {
     const { db, store } = open()
     const result = store.prune()
@@ -608,7 +655,7 @@ switch (command) {
    *
    * Separate from `publish` on purpose. `publish` sends an artifact through the market's
    * flat archive format and the `policy` gate; this package must keep its entries under
-   * `package/` to be installable by pnpm at all (§7 of docs/distributing.md), and it is
+   * `package/` to be installable by pnpm at all, and it is
    * not granted to anyone — it IS the client. Both facts make reusing `publish` wrong
    * rather than merely inconvenient.
    *

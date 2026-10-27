@@ -199,6 +199,8 @@
           （服务端在 <code>download</code> 会再判一次，一个字节都不发）。
           <br />「最新版本」取的是<strong>最高的已发布版本</strong>，不是最近发布的那一个——
           所以从旧分支发个热修不会把客户端的「更新」指向更旧的版本。
+          <br /><strong>安装人数</strong>来自客户端上报、按市场账号去重；<strong>下载次数</strong>
+          来自服务端审计，包含更新与重试，所以通常 ≥ 安装人数。没有上报的机器不会出现在统计里。
         </div>
         <section class="panel">
           <h2>已登记制品<span class="meta" id="artifacts-count"></span></h2>
@@ -209,6 +211,7 @@
           <div class="pager" id="artifacts-pager"></div>
         </section>
       </section>
+
     </div>
     <div class="status" id="status"></div>
   </section>
@@ -217,7 +220,7 @@
 <script src="/dsh-market/assets/shared.js"></script>
 <script>
 const S = globalThis.MarketShell
-const { $, state, service, show, status, setWho, chip, trow, thead, miniButton, openForm, openConfirm, makePager } = S
+const { $, state, service, show, status, setWho, chip, trow, thead, miniButton, openForm, openConfirm, openPagedList, makePager } = S
 
 /**
  * Page state.
@@ -233,6 +236,8 @@ const lists = {
   grants: { entries: [], total: 0, q: '' },
   artifacts: { entries: [], total: 0, q: '' },
 }
+/** Market account -> how many plugins it has installed, for the accounts table. */
+let installCountsByUser = new Map()
 /** Bindings for the visible accounts, keyed by market username. */
 let bindingsByUser = new Map()
 /** Group list for the pickers inside dialogs; not the paginated table. */
@@ -421,17 +426,75 @@ async function loadUsers() {
   lists.users.total = result.body?.total ?? 0
   pager.users.setTotal(lists.users.total)
 
-  // Bindings for exactly the accounts on screen. Asking for the whole table would grow
-  // without bound and would mean joining two lists by hand here.
+  // Bindings and install counts for exactly the accounts on screen. Asking for the whole
+  // table would grow without bound and would mean joining two lists by hand here.
   const names = lists.users.entries.map((user) => user.username)
   bindingsByUser = new Map()
+  installCountsByUser = new Map()
   if (names.length > 0) {
-    const bound = await service(`/dsh-market/admin/identity?usernames=${encodeURIComponent(names.join(','))}`)
+    const [bound, counts] = await Promise.all([
+      service(`/dsh-market/admin/identity?usernames=${encodeURIComponent(names.join(','))}`),
+      service(`/dsh-market/admin/installs/accounts?limit=200&usernames=${encodeURIComponent(names.join(','))}`),
+    ])
     for (const binding of bound.body?.entries ?? []) {
       bindingsByUser.set(binding.marketUsername, binding)
     }
+    for (const entry of counts.body?.entries ?? []) {
+      installCountsByUser.set(entry.username, entry.pluginCount ?? entry.items?.length ?? 0)
+    }
   }
   renderUsers()
+}
+
+/**
+ * A click on the install count asks the service for that account's inventory, one page at
+ * a time: an account can collect a lot of plugins, and the dialog must not try to render
+ * all of them at once.
+ */
+function showInstalledPlugins(username) {
+  return openPagedList({
+    title: `已安装插件 · ${username}`,
+    empty: '这个账号还没有上报过安装清单。',
+    renderLine: (item) => {
+      const versions = Array.isArray(item.versions) && item.versions.length > 0 ? ` ${item.versions.join(' / ')}` : ''
+      const kind = item.kind === 'skill' ? '（技能）' : item.kind === 'bundle' ? '（组合包）' : ''
+      return `· ${item.name}${versions}${kind}`
+    },
+    loadPage: async ({ limit, offset }) => {
+      const result = await service(
+        `/dsh-market/admin/installs/account?username=${encodeURIComponent(username)}&limit=${limit}&offset=${offset}`,
+      )
+      if (!result.ok) {
+        return { ok: false, error: result.body?.detail || result.body?.code || '读取安装清单失败' }
+      }
+      return { ok: true, total: result.body?.total ?? 0, items: result.body?.items ?? [] }
+    },
+  })
+}
+
+/** The reverse click: which accounts make up one plugin's install count. */
+function showPluginInstallers(name) {
+  return openPagedList({
+    title: `安装人数 · ${name}`,
+    empty: '还没有账号上报装着这个插件。',
+    renderLine: (account) => {
+      const who = account.displayName ? `${account.displayName}（${account.username}）` : account.username
+      const versions = Array.isArray(account.versions) && account.versions.length > 0
+        ? ` ${account.versions.join(' / ')}`
+        : ''
+      const devices = account.devices > 1 ? ` · ${account.devices} 台设备` : ''
+      return `· ${who}${versions}${devices}`
+    },
+    loadPage: async ({ limit, offset }) => {
+      const result = await service(
+        `/dsh-market/admin/installs/plugin?name=${encodeURIComponent(name)}&limit=${limit}&offset=${offset}`,
+      )
+      if (!result.ok) {
+        return { ok: false, error: result.body?.detail || result.body?.code || '读取安装账号失败' }
+      }
+      return { ok: true, total: result.body?.total ?? 0, items: result.body?.accounts ?? [] }
+    },
+  })
 }
 
 function renderUsers() {
@@ -442,7 +505,8 @@ function renderUsers() {
   // Headings first: without them the cells are unlabelled.
   table.appendChild(thead([
     ['账号', 'grow'], ['角色', 'col-role'], ['状态', 'col-status'],
-    ['权限组', 'col-groups'], ['DSH 绑定', 'col-bind'], ['', 'col-actions'],
+    ['权限组', 'col-groups'], ['已装', 'col-install-count'],
+    ['DSH 绑定', 'col-bind'], ['', 'col-actions'],
   ]))
   if (entries.length === 0) {
     const empty = document.createElement('div')
@@ -464,13 +528,29 @@ function renderUsers() {
      * doubled the height and left room for five accounts on a screen. Membership moved
      * into the edit dialog, so the row now reports it as text instead of editing it.
      */
+    const installedCount = installCountsByUser.get(user.username) ?? 0
     const row = trow([
       ['', 'grow'],
       [isAdmin ? '管理员' : '普通', 'col-role ' + (isAdmin ? 'ok' : '')],
       [disabled ? '已停用' : (user.mustChangePassword ? '待改密' : '正常'), 'col-status ' + (disabled ? 'bad' : '')],
       [groups.length ? groups.join('、') : '—', 'col-groups'],
+      ['—', 'col-install-count'],
       [binding ? (binding.dshName || binding.dshUserId) : '—', 'col-bind'],
     ])
+
+    /**
+     * A COUNT, not a list.
+     *
+     * The inventory itself is fetched only when this number is clicked: an account can have
+     * many plugins, and putting them in the row would crowd out the account identity and make
+     * every page load carry data nobody asked for.
+     */
+    if (installedCount > 0) {
+      const cell = row.children[4]
+      cell.textContent = ''
+      cell.title = '点击查看已安装插件'
+      cell.appendChild(miniButton(String(installedCount), () => showInstalledPlugins(user.username)))
+    }
 
     // The identity cell is built by hand: it carries the login name and the display name
     // at two weights, which a plain text cell cannot express.
@@ -488,7 +568,7 @@ function renderUsers() {
 
     // The DSH account id is long and is what an administrator compares against a conflict
     // message, so it stays available as a tooltip while the row shows the readable name.
-    if (binding) row.children[4].title = binding.dshUserId
+    if (binding) row.children[5].title = binding.dshUserId
 
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
@@ -951,6 +1031,22 @@ async function loadArtifacts() {
   renderArtifacts()
 }
 
+/**
+ * A size a person can read at a glance.
+ *
+ * The table showed raw bytes (`48213 B`), which is technically exact and practically useless:
+ * all the information an operator needs is the order of magnitude. KB/MB are binary units here
+ * because that is what the package sizes actually are; `toFixed(1)` avoids making 1.0 MB and
+ * 1 MB look like different weights.
+ */
+function formatBytes(bytes) {
+  const value = Number(bytes ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function renderArtifacts() {
   const table = $('artifacts-table')
   table.textContent = ''
@@ -961,6 +1057,12 @@ function renderArtifacts() {
     // Secondary columns: dropped before the name is ever squeezed (see `.col-narrow-hide`).
     ['通道', 'col-role col-narrow-hide'],
     ['状态', 'col-status'], ['召回', 'col-status'],
+    // Same source as the accounts page: client-reported installs (account-deduplicated) and
+    // server-audited downloads. They answer different questions and are not expected to match.
+    ['安装人数', 'col-num col-narrow-hide'],
+    // The gap before 大小 is deliberate: the two numbers are unrelated, and at the row gap of
+    // 10px they read as one run-on column pair.
+    ['下载次数', 'col-num col-download col-narrow-hide'],
     ['大小', 'col-status col-narrow-hide'], ['', 'col-actions'],
   ]))
   if (entries.length === 0) {
@@ -1009,8 +1111,24 @@ function renderArtifacts() {
        * an operator actually asked for.
        */
       [artifact.recalled === true ? '已召回' : '', 'col-status ' + (artifact.recalled === true ? 'bad' : '')],
-      [`${artifact.sizeBytes ?? 0} B`, 'col-status col-narrow-hide'],
+      [String(artifact.installers ?? 0), 'col-num col-narrow-hide'],
+      [String(artifact.downloads ?? 0), 'col-num col-download col-narrow-hide'],
+      [formatBytes(artifact.sizeBytes), 'col-status col-narrow-hide'],
     ])
+
+    /**
+     * 安装人数 is the entry point to the account list behind it — the same lazy pattern the
+     * accounts table uses in the other direction. Zero stays plain text: a button that opens
+     * an empty dialog is worse than a number that says there is nothing to open.
+     */
+    const installerCount = Number(artifact.installers ?? 0)
+    if (installerCount > 0) {
+      const cell = row.children[6]
+      cell.textContent = ''
+      cell.title = '点击查看安装账号'
+      cell.appendChild(miniButton(String(installerCount), () => showPluginInstallers(artifact.name)))
+    }
+
     const actions = document.createElement('div')
     actions.className = 'cell-actions'
     // Replacing four one-click "→ state" buttons with one dialog: those buttons made an

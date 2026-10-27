@@ -1,0 +1,13 @@
+# Keep the build context small and never ship runtime state or credentials.
+.git
+.gitignore
+.gitattributes
+.market
+.research
+.acl-repair
+dist
+preview
+node_modules
+tools
+docs
+*.tgz
