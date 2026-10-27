@@ -659,7 +659,7 @@ switch (command) {
    * not granted to anyone — it IS the client. Both facts make reusing `publish` wrong
    * rather than merely inconvenient.
    *
-   *   node server/cli.mjs publish:self --archive dist/dsh-plugin-marketplace-0.1.0.tgz
+   *   node server/cli.mjs publish:self --archive dist/dsh-plugin-market-internal-0.1.0.tgz
    *   node server/cli.mjs publish:self --dir .          # packs it here, same layout
    */
   case 'publish:self': {

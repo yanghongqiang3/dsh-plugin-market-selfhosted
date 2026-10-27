@@ -215,7 +215,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
       role: caller.user.role,
       mustChangePassword: caller.mustChangePassword,
       groups: store.groupsOf(caller.user.username).map((group) => group.id),
-      service: { name: 'dsh-plugin-marketplace-service', version: 1 },
+      service: { name: 'dsh-plugin-market-internal-service', version: 1 },
     })
   })
 
@@ -1007,7 +1007,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
   route('GET', '/dsh-market/health', (req, res) => {
     json(res, 200, {
       ok: true,
-      service: 'dsh-plugin-marketplace-service',
+      service: 'dsh-plugin-market-internal-service',
       users: store.countUsers(),
       artifacts: artifacts.catalogRows().length,
       time: Date.now(),
@@ -1073,7 +1073,7 @@ export function createMarketServer({ store, artifacts, maxUploadBytes = DEFAULT_
   route('GET', '/', (req, res) => {
     json(res, 200, {
       ok: true,
-      service: 'dsh-plugin-marketplace-service',
+      service: 'dsh-plugin-market-internal-service',
       console: '/console',
       entry: '在 DSH 内点击左侧栏底部的「内部插件市场」安装与卸载插件；账号、权限、发布在本控制台。',
     })

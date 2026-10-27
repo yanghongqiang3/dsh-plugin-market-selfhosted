@@ -46,7 +46,7 @@ export { compareVersions, parseVersion }
 const PUBLISHABLE = 'published'
 
 /** The package name of the market's own client plugin. */
-export const MARKETPLACE_NAME = 'dsh-plugin-marketplace'
+export const MARKETPLACE_NAME = 'dsh-plugin-market-internal'
 
 
 export class Artifacts {

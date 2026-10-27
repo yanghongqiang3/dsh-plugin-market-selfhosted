@@ -1,4 +1,4 @@
-# DSH bundle patch layer for dsh-plugin-marketplace.
+# DSH bundle patch layer for dsh-plugin-market-internal.
 #
 # How this layer is read (verified against dsh-app-boot's applyEntryPatches):
 #
@@ -16,8 +16,8 @@
 #
 # There are TWO rows, and the difference in their `name` is load-bearing:
 #
-#   dsh-plugin-marketplace/plugin   Host half. A host row may name a subpath.
-#   dsh-plugin-marketplace          Browser half. This MUST be the bare package
+#   dsh-plugin-market-internal/plugin   Host half. A host row may name a subpath.
+#   dsh-plugin-market-internal          Browser half. This MUST be the bare package
 #                                   name: `dsh-client-modules` resolves a row's
 #                                   package.json via `exactPackageSpecifier`,
 #                                   which returns undefined for any specifier
@@ -38,14 +38,14 @@
 
 - insert:
     - id: marketplace
-      name: dsh-plugin-marketplace/plugin
+      name: dsh-plugin-market-internal/plugin
     - id: marketplace-client
-      name: dsh-plugin-marketplace
+      name: dsh-plugin-market-internal
 
 # Verify after a DSH restart:
 #   ~/.dsh/plugin-marketplace-diag.log records
 #     [entry] registered webserver/index-inject rows (desktop + web shell)
 #     [register] registered 7/7 routes
 #   and the startup output must NOT contain
-#     marketplace-client (dsh-plugin-marketplace): failed to import
+#     marketplace-client (dsh-plugin-market-internal): failed to import
 #   `plugin_manager` list_bundles should show this bundle with TWO rows.

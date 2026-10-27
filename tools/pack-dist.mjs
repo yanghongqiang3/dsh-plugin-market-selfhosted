@@ -6,7 +6,7 @@
  * Produces a `.tar.gz` a DSH client installs with one command (the path the packer prints at
  * the end, with the CURRENT version — do not hardcode it here, it drifts):
  *
- *   dsh plugin --profile <name> add ./dist/dsh-plugin-marketplace-<version>.tgz
+ *   dsh plugin --profile <name> add ./dist/dsh-plugin-market-internal-<version>.tgz
  *
  * WHY THE `package/` PREFIX IS LOAD-BEARING
  *

@@ -55,7 +55,7 @@ function main() {
 
   server.listen(PORT, HOST, () => {
     const base = `http://${CALLBACK_HOST}:${PORT}`
-    console.log('dsh-plugin-marketplace-service')
+    console.log('dsh-plugin-market-internal-service')
     console.log(`  listening   ${HOST}:${PORT}`)
     console.log(`  base url    ${base}`)
     console.log(`  database    ${dbFile}`)

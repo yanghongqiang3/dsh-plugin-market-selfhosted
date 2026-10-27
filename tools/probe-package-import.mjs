@@ -25,7 +25,7 @@ import { extractTarGz } from '../lib/tar.js'
 /**
  * The default archive is DERIVED from package.json, not written out.
  *
- * It was the literal `dsh-plugin-marketplace-0.1.0.tgz`, so the moment the version moved on,
+ * It was the literal `dsh-plugin-market-internal-0.1.0.tgz`, so the moment the version moved on,
  * this probe silently started checking the PREVIOUS build — the one file whose whole job is to
  * validate the current archive was validating a stale one. `pack-dist.mjs` had the same string
  * in a usage comment.
@@ -86,7 +86,7 @@ try {
   try {
     const module = await import(pathToFileURL(join(work, 'lib', 'plugin.js')).href)
     ok('装出来的宿主半边能被 import', typeof module.apply === 'function', `apply=${typeof module.apply}`)
-    ok('  且导出 name', module.name === 'dsh-plugin-marketplace', String(module.name))
+    ok('  且导出 name', module.name === 'dsh-plugin-market-internal', String(module.name))
   } catch (error) {
     ok('装出来的宿主半边能被 import', false, String(error.message).split('\n')[0])
   }

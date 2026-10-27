@@ -5,12 +5,12 @@
 # only, so there is no npm install layer and nothing to compile.
 #
 # NODE_IMAGE is overridable so a restricted network can point it at a mirror:
-#   docker build --build-arg NODE_IMAGE=<mirror>/library/node:24-alpine -t dsh-plugin-marketplace .
+#   docker build --build-arg NODE_IMAGE=<mirror>/library/node:24-alpine -t dsh-plugin-market-internal .
 ARG NODE_IMAGE=node:24-alpine
 FROM ${NODE_IMAGE}
 
-LABEL org.opencontainers.image.title="dsh-plugin-marketplace" \
-      org.opencontainers.image.description="DSH internal plugin marketplace server (accounts, permissions, catalog, artifacts)"
+LABEL org.opencontainers.image.title="dsh-plugin-market-internal" \
+      org.opencontainers.image.description="Self-hosted DSH plugin marketplace server (accounts, permissions, catalog, artifacts, statistics)"
 
 WORKDIR /app
 

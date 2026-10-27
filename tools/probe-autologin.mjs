@@ -23,7 +23,7 @@ const profileDir = join(work, 'profile')
 mkdirSync(join(profileDir, 'node_modules'), { recursive: true })
 writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
   name: 'dsh-profile-autologin', private: true,
-  dsh: { profile: { bundles: ['dsh-plugin-marketplace'], disabledBundles: [] } },
+  dsh: { profile: { bundles: ['dsh-plugin-market-internal'], disabledBundles: [] } },
 }))
 writeFileSync(join(profileDir, 'cordis.patch.yml'), '')
 
