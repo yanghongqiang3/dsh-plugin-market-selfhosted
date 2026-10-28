@@ -45,7 +45,7 @@ const buildPackage = (version, marker) => {
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(join(dir, 'package', 'lib'), { recursive: true })
   writeFileSync(join(dir, 'package', 'package.json'), JSON.stringify({
-    name: 'dsh-plugin-market-internal',
+    name: 'dsh-plugin-market-selfhosted',
     version,
     exports: { './client': './lib/client.js' },
   }, null, 2))
@@ -63,10 +63,10 @@ const buildPackage = (version, marker) => {
 
 /** Install a version into a profile as a REAL directory (not a link). */
 const installReal = (profileDir, version, marker) => {
-  const target = join(profileDir, 'node_modules', 'dsh-plugin-market-internal')
+  const target = join(profileDir, 'node_modules', 'dsh-plugin-market-selfhosted')
   rmSync(target, { recursive: true, force: true })
   mkdirSync(join(target, 'lib'), { recursive: true })
-  writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-plugin-market-internal', version }))
+  writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'dsh-plugin-market-selfhosted', version }))
   writeFileSync(join(target, 'lib', 'plugin.js'), `// ${marker}\n`)
   writeFileSync(join(target, 'lib', 'client.js'), `// ${marker}\n`)
   return target
@@ -78,7 +78,7 @@ const makeProfile = (name) => {
   writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
     name: `dsh-profile-${name}`,
     private: true,
-    dsh: { profile: { bundles: ['dsh-plugin-market-internal'], disabledBundles: [] } },
+    dsh: { profile: { bundles: ['dsh-plugin-market-selfhosted'], disabledBundles: [] } },
   }))
   writeFileSync(join(profileDir, 'cordis.patch.yml'), '')
   return profileDir
@@ -153,9 +153,9 @@ console.log('--- 链接安装：必须拒绝，否则会写穿到源目录 ---')
   // A real source tree somewhere else, linked in — the development / pnpm layout.
   const source = join(work, 'source-tree')
   mkdirSync(join(source, 'lib'), { recursive: true })
-  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: 'dsh-plugin-market-internal', version: '1.0.0' }))
+  writeFileSync(join(source, 'package.json'), JSON.stringify({ name: 'dsh-plugin-market-selfhosted', version: '1.0.0' }))
   writeFileSync(join(source, 'lib', 'plugin.js'), '// SOURCE-MUST-SURVIVE\n')
-  const target = join(profileDir, 'node_modules', 'dsh-plugin-market-internal')
+  const target = join(profileDir, 'node_modules', 'dsh-plugin-market-selfhosted')
   rmSync(target, { recursive: true, force: true })
   symlinkSync(source, target, 'junction')
   ok('前提：装的确实是链接', lstatSync(target).isSymbolicLink())

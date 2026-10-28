@@ -43,7 +43,7 @@ const ok = (label, condition, extra = '') => {
 }
 
 ok('plugin 导出 apply 函数', typeof pluginMod.apply === 'function')
-ok('plugin 导出 name', pluginMod.name === 'dsh-plugin-market-internal', pluginMod.name)
+ok('plugin 导出 name', pluginMod.name === 'dsh-plugin-market-selfhosted', pluginMod.name)
 ok(
   'bundle 入口是合法插件（有 apply）',
   typeof bundleMod.apply === 'function',

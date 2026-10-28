@@ -2,7 +2,7 @@ name: release
 
 # On a v* tag, build the installable client tarball and attach it to the
 # GitHub Release. The asset name deliberately carries no version: the stable
-# https://github.com/<owner>/<repo>/releases/latest/download/dsh-plugin-market-internal.tgz
+# https://github.com/<owner>/<repo>/releases/latest/download/dsh-plugin-market-selfhosted.tgz
 # link then keeps working across releases (the community marketplace's
 # `tarball:` field relies on that).
 on:
@@ -24,8 +24,8 @@ jobs:
       - name: Build the client tarball
         run: node tools/pack-dist.mjs
       - name: Use a version-free asset name
-        run: mv dist/*.tgz dsh-plugin-market-internal.tgz
+        run: mv dist/*.tgz dsh-plugin-market-selfhosted.tgz
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dsh-plugin-market-internal.tgz --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" dsh-plugin-market-selfhosted.tgz --generate-notes

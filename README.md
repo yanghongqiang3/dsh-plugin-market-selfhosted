@@ -1,10 +1,8 @@
-# dsh-plugin-market-internal
+# dsh-plugin-market-selfhosted
 
 **English** | [中文](README.zh.md)
 
 An internal plugin marketplace for DSH: **a private marketplace server plus a DSH client plugin**.
-
-> The package name is `dsh-plugin-market-internal`; the GitHub repository is `dsh-plugin-market-selfhosted`. The former is the DSH install/registration identifier, the latter is only the repository address.
 
 It does not drop plugin archives into a shared directory. It provides a controlled distribution path: admins publish and grant on the server, while users browse, install and update from the **Internal Plugin Market** (「内部插件市场」) entry in the DSH sidebar. Accounts, permissions, artifacts and audit data all live on the server; the local side only writes files into the current profile.
 
@@ -48,7 +46,7 @@ dsh plugin --profile desktop add github:yanghongqiang3/dsh-plugin-market-selfhos
 Tags matching `v*` publish a prebuilt tarball through GitHub Releases. You can also download it and install locally:
 
 ```bash
-dsh plugin --profile desktop add ./dsh-plugin-market-internal.tgz
+dsh plugin --profile desktop add ./dsh-plugin-market-selfhosted.tgz
 ```
 
 After installation, set `MARKET_SERVICE_URL` and restart DSH; the **Internal Plugin Market** entry appears at the bottom of the sidebar.
@@ -201,11 +199,11 @@ chmod +x start-market.sh
 **Docker**
 
 ```bash
-docker build -t dsh-plugin-market-internal .
+docker build -t dsh-plugin-market-selfhosted .
 docker run -d --name dsh-market \
   -p 8787:8787 \
   -v dsh-market-data:/data \
-  dsh-plugin-market-internal
+  dsh-plugin-market-selfhosted
 docker logs dsh-market
 ```
 
@@ -251,10 +249,10 @@ Publishing requires admin; ordinary members can only browse and install.
 node tools/pack-dist.mjs
 ```
 
-It prints the output path, normally `dist/dsh-plugin-market-internal-<version>.tgz`. Install it into the profile you actually use:
+It prints the output path, normally `dist/dsh-plugin-market-selfhosted-<version>.tgz`. Install it into the profile you actually use:
 
 ```bash
-dsh plugin --profile desktop add "./dist/dsh-plugin-market-internal-<version>.tgz"
+dsh plugin --profile desktop add "./dist/dsh-plugin-market-selfhosted-<version>.tgz"
 ```
 
 (Use the path printed by `node tools/pack-dist.mjs`.)
@@ -289,7 +287,7 @@ Then **restart DSH**. The **Internal Plugin Market** button appears at the botto
 - `~/.dsh/plugin-marketplace-diag.log` contains `[profile]`, `[register]` and `[skills]` lines.
 - DSH stderr does not contain `failed to import`.
 
-If you see `failed to import`, first check whether `node_modules/dsh-plugin-market-internal/lib/plugin.js` really lives under `lib/`. A flat file at the package root means the archive was built without the `package/` prefix; rerun `node tools/pack-dist.mjs`.
+If you see `failed to import`, first check whether `node_modules/dsh-plugin-market-selfhosted/lib/plugin.js` really lives under `lib/`. A flat file at the package root means the archive was built without the `package/` prefix; rerun `node tools/pack-dist.mjs`.
 
 ### 6. Publish the first plugin
 
@@ -364,7 +362,7 @@ On the development machine, after bumping the version:
 
 ```bash
 node tools/pack-dist.mjs
-node server/cli.mjs publish:self --archive dist/dsh-plugin-market-internal-<version>.tgz
+node server/cli.mjs publish:self --archive dist/dsh-plugin-market-selfhosted-<version>.tgz
 ```
 
 The server does not need a restart; the next client start picks up the new package (**taking effect after DSH restarts**). If the server does not have this repository, run `publish:self --dir .` there to pack the checkout itself.
@@ -392,13 +390,13 @@ MARKET_SERVICE_URL=http://<server-ip>:8787
 The image contains **only the market server**, not the DSH client plugin. Install the client plugin with `dsh plugin add` and point it at this service through `MARKET_SERVICE_URL`.
 
 ```bash
-docker build -t dsh-plugin-market-internal .
+docker build -t dsh-plugin-market-selfhosted .
 
 docker run -d --name dsh-market \
   -p 8787:8787 \
   -v dsh-market-data:/data \
   -e MARKET_CALLBACK_HOST=market.example.com \
-  dsh-plugin-market-internal
+  dsh-plugin-market-selfhosted
 ```
 
 - All state lives in `/data`: the SQLite database and the artifact bytes. Back it up as one unit; a database backup without the artifacts cannot install the published plugins.
@@ -406,7 +404,7 @@ docker run -d --name dsh-market \
 
   ```bash
   mkdir -p ./market-data && chown -R 1000:1000 ./market-data
-  docker run -d -p 8787:8787 -v "$PWD/market-data:/data" dsh-plugin-market-internal
+  docker run -d -p 8787:8787 -v "$PWD/market-data:/data" dsh-plugin-market-selfhosted
   ```
 
 - If Docker Hub is unreachable, build with a different base-image source:
@@ -414,7 +412,7 @@ docker run -d --name dsh-market \
   ```bash
   docker build \
     --build-arg NODE_IMAGE=<mirror>/library/node:24-alpine \
-    -t dsh-plugin-market-internal .
+    -t dsh-plugin-market-selfhosted .
   ```
 
 - The server speaks HTTP only. For internet or enterprise-gateway deployments, put it behind an HTTPS reverse proxy and point `MARKET_SERVICE_URL` at the https address.

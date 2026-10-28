@@ -1,6 +1,6 @@
 {
-  "name": "dsh-plugin-market-internal",
-  "version": "0.1.3",
+  "name": "dsh-plugin-market-selfhosted",
+  "version": "0.1.4",
   "type": "module",
   "description": "Self-hosted plugin marketplace for DeepSeek Harness: a DSH client bundle plus the market server under server/ (accounts, groups, permissions, artifact storage, install statistics).",
   "license": "MIT",
@@ -55,7 +55,9 @@
     "client": {
       "platform": "web",
       "immediately": true,
-      "inject": ["@deepseek-ai/dsh-client-ui-sidebar"]
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
     },
     "market": {
       "displayName": "内部插件市场",

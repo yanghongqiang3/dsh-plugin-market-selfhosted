@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url'
 const profileDir =
   process.argv[2] ?? path.join(process.env.USERPROFILE ?? '', '.dsh', 'profiles', 'desktop')
 
-const PKG = 'dsh-plugin-market-internal'
+const PKG = 'dsh-plugin-market-selfhosted'
 
 let problems = 0
 const fail = (message) => (problems += 1, console.error(`FAIL  ${message}`))

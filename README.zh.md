@@ -1,10 +1,8 @@
-# dsh-plugin-market-internal
+# dsh-plugin-market-selfhosted
 
 **中文** | [English](README.md)
 
 DSH 内部插件市场：**一个私有市场服务端 + 一个 DSH 客户端插件**。
-
-> 包名是 `dsh-plugin-market-internal`，GitHub 仓库名是 `dsh-plugin-market-selfhosted`；前者是 DSH 的安装/注册标识，后者只是仓库地址。
 
 它不是把插件包丢进共享目录，而是提供一条受控的分发链路：管理员在服务端发布和授权，用户在 DSH 左侧栏点「内部插件市场」浏览、安装、更新；账号、权限、制品、审计数据全部在服务端，本机只负责落盘。
 
@@ -46,7 +44,7 @@ dsh plugin --profile desktop add github:yanghongqiang3/dsh-plugin-market-selfhos
 `v*` tag 构建后会发布预构建包，也可以下载后本地安装：
 
 ```bash
-dsh plugin --profile desktop add ./dsh-plugin-market-internal.tgz
+dsh plugin --profile desktop add ./dsh-plugin-market-selfhosted.tgz
 ```
 
 装完设置 `MARKET_SERVICE_URL` 并重启 DSH，左侧栏底部会出现「内部插件市场」。
@@ -199,11 +197,11 @@ chmod +x start-market.sh
 **Docker**
 
 ```bash
-docker build -t dsh-plugin-market-internal .
+docker build -t dsh-plugin-market-selfhosted .
 docker run -d --name dsh-market \
   -p 8787:8787 \
   -v dsh-market-data:/data \
-  dsh-plugin-market-internal
+  dsh-plugin-market-selfhosted
 docker logs dsh-market
 ```
 
@@ -249,10 +247,10 @@ node server/cli.mjs user:list
 node tools/pack-dist.mjs
 ```
 
-它会打印输出路径，通常是 `dist/dsh-plugin-market-internal-<version>.tgz`，然后把它装进你实际使用的 profile：
+它会打印输出路径，通常是 `dist/dsh-plugin-market-selfhosted-<version>.tgz`，然后把它装进你实际使用的 profile：
 
 ```bash
-dsh plugin --profile desktop add "./dist/dsh-plugin-market-internal-<version>.tgz"
+dsh plugin --profile desktop add "./dist/dsh-plugin-market-selfhosted-<version>.tgz"
 ```
 
 （路径以 `node tools/pack-dist.mjs` 打印的为准。）
@@ -291,7 +289,7 @@ export MARKET_SERVICE_URL=http://127.0.0.1:8787
 - `~/.dsh/plugin-marketplace-diag.log` 里有 `[profile]`、`[register]`、`[skills]` 行；
 - DSH stderr 没有 `failed to import`。
 
-如果看到 `failed to import`，先检查 `node_modules/dsh-plugin-market-internal/lib/plugin.js` 是否真的在 `lib/` 下；文件扁平地躺在包根，说明归档没用 `package/` 前缀，重新跑 `node tools/pack-dist.mjs`。
+如果看到 `failed to import`，先检查 `node_modules/dsh-plugin-market-selfhosted/lib/plugin.js` 是否真的在 `lib/` 下；文件扁平地躺在包根，说明归档没用 `package/` 前缀，重新跑 `node tools/pack-dist.mjs`。
 
 ### 6. 发布第一个插件
 
@@ -366,7 +364,7 @@ node server/cli.mjs publish --dir ./my-plugin
 
 ```bash
 node tools/pack-dist.mjs
-node server/cli.mjs publish:self --archive dist/dsh-plugin-market-internal-<version>.tgz
+node server/cli.mjs publish:self --archive dist/dsh-plugin-market-selfhosted-<version>.tgz
 ```
 
 服务端不需要重启，下一次客户端启动会自动换上（**重启 DSH 后生效**）。服务器上没有这个仓库时，也可以在服务器上用 `publish:self --dir .` 自行打包。
@@ -394,13 +392,13 @@ MARKET_SERVICE_URL=http://<服务器IP>:8787
 镜像**只包含市场服务端**，不含 DSH 客户端插件；客户端插件仍然用 `dsh plugin add` 安装，并通过 `MARKET_SERVICE_URL` 指向这个服务。
 
 ```bash
-docker build -t dsh-plugin-market-internal .
+docker build -t dsh-plugin-market-selfhosted .
 
 docker run -d --name dsh-market \
   -p 8787:8787 \
   -v dsh-market-data:/data \
   -e MARKET_CALLBACK_HOST=market.example.com \
-  dsh-plugin-market-internal
+  dsh-plugin-market-selfhosted
 ```
 
 - 数据全在 `/data`：SQLite 数据库 + 制品字节。备份时作为一个整体备份；只备份数据库而没有制品，已发布的插件无法安装。
@@ -408,7 +406,7 @@ docker run -d --name dsh-market \
 
   ```bash
   mkdir -p ./market-data && chown -R 1000:1000 ./market-data
-  docker run -d -p 8787:8787 -v "$PWD/market-data:/data" dsh-plugin-market-internal
+  docker run -d -p 8787:8787 -v "$PWD/market-data:/data" dsh-plugin-market-selfhosted
   ```
 
 - 如果 Docker Hub 不可达，可以换基础镜像源构建：
@@ -416,7 +414,7 @@ docker run -d --name dsh-market \
   ```bash
   docker build \
     --build-arg NODE_IMAGE=<镜像源>/library/node:24-alpine \
-    -t dsh-plugin-market-internal .
+    -t dsh-plugin-market-selfhosted .
   ```
 
 - 服务端本身只说 HTTP。对公网/企业网关部署时，把它放在 HTTPS 反向代理后面，然后让客户端把 `MARKET_SERVICE_URL` 指向 https 地址。
